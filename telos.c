@@ -20,6 +20,7 @@
 
 extern char core_desc[];
 void dl_flush(void);
+extern void core_param_install(void) __attribute__((weak));   /* core-dn1 5.4; 0 on older cores */
 
 #define STAGING      ((u8 *)0x44000000)  /* the bulk area's start: scratch at the join (above) */
 #define STAGING_SIZE 0x80000u            /* 512 KB: the largest file one boot reads */
@@ -261,6 +262,8 @@ static void boot(void)
     }
     armed = 1;
     armed_ticks = 0;
+    if (core_param_install)              /* core-dn1 5.4: the linked mods' parameter slots */
+        core_param_install();
     for (i = 0; i < dl_inits_n; i++)
         if (dl_inits[i])
             ((void (*)(void))dl_inits[i])();

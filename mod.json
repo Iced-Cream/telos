@@ -80,5 +80,8 @@
  },
  "requires": [
   "core"
+ ],
+ "weak": [
+  "core_param_install"
  ]
 }
