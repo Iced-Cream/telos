@@ -1,13 +1,23 @@
-# TELOS
+<p align="center"><img src="brand/telos-header.png" alt="telos, the elekloader os" width="480"></p>
 
-Mods kept on the Digitone mk1 itself. A build flashed once with TELOS links more mods at every boot
-from a store on the unit's +Drive, with no new firmware: you send `.elemod` files over USB, and
-SETTINGS > MODS (TELOS) switches them on and off.
+# telos
 
-For the Digitone mk1 and Digitone Keys, OS 1.43 and 1.44, on [elekloader](https://github.com/elekloader/elekloader)'s
-core-dn1 5.0 or newer. Version 0.2 has run on a Digitone mk1 with OS 1.44: three mods sent over USB
-(19 KB in 0.6 s), restarted into, run, and switched off and on again from the unit. OS 1.43 has run in
-digiemu's emulator only.
+**The elekloader OS.** Flash once, then keep your mods on the unit itself. A build flashed once with
+telos links more mods at every boot from a store on the unit, with no new firmware: you send
+`.elemod` files over USB, and a page in the unit's SETTINGS switches them on and off.
+
+telos is part of [elekloader](https://github.com/elekloader/elekloader), the mod loader for Elektron
+firmware, and is meant for every device elekloader supports.
+
+| Device | telos | Status |
+|---|---|---|
+| Digitone mk1 and Digitone Keys (OS 1.43, 1.44) | 0.2 | runs on a unit (OS 1.44); OS 1.43 in digiemu's emulator only |
+| Octatrack MKI and MKII (OS 1.40C) | 0.2 | runs in the emulator; not in this repo yet |
+| Digitakt, Digitakt II, Digitone II, Analog Rytm, Analog Four, Model:Cycles, Model:Samples | | planned |
+
+The rest of this page is the Digitone mk1's: OS 1.43 and 1.44, on elekloader's core-dn1 5.0 or newer.
+Version 0.2 has run on a Digitone mk1 with OS 1.44: three mods sent over USB (19 KB in 0.6 s),
+restarted into, run, and switched off and on again from the unit.
 
 ## Install
 
