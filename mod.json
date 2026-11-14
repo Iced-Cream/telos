@@ -1,0 +1,84 @@
+{
+ "id": "telos",
+ "version": "0.2",
+ "title": "TELOS",
+ "category": "Framework",
+ "license": "GPL-2.0-or-later",
+ "author": "irpina",
+ "description": "Mods kept on the Digitone mk1 itself (OS 1.43 and 1.44, core-dn1 5.0 or newer): a 2 MB store in the +Drive's raw sectors holds .elemod files, and at every boot TELOS links the ones switched on into the +Drive mods' area, with no new firmware. SETTINGS > MODS (TELOS) lists them: YES switches one on or off, APPLY & RESTART links the new set. A crash guard skips the mods once after a boot that didn't get 10 s in. tools/telos.py puts mods in the store, over USB MIDI SysEx on a unit (python tools/telos.py unit ...) or in a card image.",
+ "device": "digitone-mk1",
+ "os": "1.43",
+ "ports": {
+  "1.44": {
+   "defsym": {
+    "STR_CTOR": "0x4018afc8",
+    "ICON_VTABLE": "0x401ccd7c"
+   }
+  }
+ },
+ "sources": [
+  "telos.c",
+  "page.c",
+  "upload.c",
+  "row.s",
+  "flush.s",
+  "vendor/drive-loader/dlink.c",
+  "vendor/drive-loader/json.c"
+ ],
+ "cflags": [
+  "-Os",
+  "-fno-ipa-sra"
+ ],
+ "defsym": {
+  "STR_CTOR": "0x4018ac7c",
+  "ICON_VTABLE": "0x401cc9ac"
+ },
+ "subscribe": [
+  {
+   "event": "ev_card_ready",
+   "fn": "telos_card_ready",
+   "order": 1
+  },
+  {
+   "event": "ev_sysex",
+   "fn": "telos_sysex",
+   "order": 1
+  },
+  {
+   "event": "ev_settings",
+   "fn": "telos_settings",
+   "order": 90
+  },
+  {
+   "event": "ev_key",
+   "fn": "telos_key",
+   "order": 1
+  },
+  {
+   "event": "ev_enc",
+   "fn": "telos_enc",
+   "order": 1
+  },
+  {
+   "event": "ev_tick",
+   "fn": "telos_tick",
+   "order": 90
+  },
+  {
+   "event": "ev_draw",
+   "fn": "telos_draw",
+   "order": 99
+  },
+  {
+   "event": "ev_crash",
+   "fn": "telos_crash",
+   "order": 1
+  }
+ ],
+ "resources": {
+  "core": "5.0"
+ },
+ "requires": [
+  "core"
+ ]
+}

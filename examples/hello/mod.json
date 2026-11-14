@@ -1,0 +1,16 @@
+{
+ "id": "telhello", "version": "0.1",
+ "license": "GPL-2.0-or-later",
+ "title": "HELLO (TELOS)", "category": "Example", "author": "irpina",
+ "description": "The smallest mod for TELOS on the Digitone mk1: kept in the unit's TELOS store and linked at boot, not flashed. It adds HELLO to the Mod Menu (hold a track key); HELLO opens a tile that counts how often it was picked. A template: a TELOS mod has only .run and .bss and names no firmware address.",
+ "device": "digitone-mk1", "os": "1.43",
+ "ports": {"1.44": {}},
+ "sources": ["hello.c"],
+ "cflags": ["-Os"],
+ "contribute": [
+  {"to": "core_menu", "order": 100, "data": "00000000",
+   "relocs": [[0, "abs32", "sym:hello_menu", 0]]}
+ ],
+ "resources": {"core": "3.1"},
+ "requires": ["core"]
+}

@@ -1,0 +1,7 @@
+*.syx
+*.elemod
+*.bin
+*.work/
+out/
+build/
+__pycache__/
