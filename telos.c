@@ -168,7 +168,18 @@ void dl_sha256(const u8 *p, u32 n, u8 out[32])
 
 int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= (u32)IMAGE_END; }
 
-void dl_stock_read(u8 *dst, u32 a, u32 n) { dl_memcpy(dst, (const void *)a, n); }
+/* Stock bytes: core-dn1 5.4 copies the OS image before the OS runs (core_stock_info: where, bytes, from
+ * 0x40000400); the OS changes some of its data before the join, so the copy is read where it covers. On
+ * an older core, RAM as it is at the join. The descriptor's shadow goes over either (dlink.c). */
+extern const u32 core_stock_info[2] __attribute__((weak));
+
+void dl_stock_read(u8 *dst, u32 a, u32 n)
+{
+    if (core_stock_info && a >= IMAGE_LO && a + n <= IMAGE_LO + core_stock_info[1])
+        dl_memcpy(dst, (const void *)(core_stock_info[0] + (a - IMAGE_LO)), n);
+    else
+        dl_memcpy(dst, (const void *)a, n);
+}
 void dl_site_saving(u32 addr, u32 len) { (void)addr; (void)len; }
 
 u32 telos_irq_off(void);
