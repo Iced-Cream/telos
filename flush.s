@@ -36,3 +36,9 @@ telos_irq_restore:
         move.l  4(%sp), %d0
         move.w  %d0, %sr
         rts
+
+| telos_sp() -> the stack pointer (the init task's, at ev_card_ready): its own stack's scan.
+        .globl  telos_sp
+telos_sp:
+        move.l  %sp, %d0
+        rts

@@ -102,8 +102,8 @@ s32 dl_read_file(const char *name, u8 *buf, u32 max)
  * The linker (vendor/drive-loader, DL_SITES) checks each site's bytes against stock's (sha256), refuses
  * two mods' overlapping sites and writes them between dl_commit_begin and dl_commit_end. At ev_card_ready
  * the init task runs and the UI, MIDI and project tasks do not exist yet; the commit masks interrupts and
- * writes. POC: no scan of the other tasks' stacks for a return address inside a site (the Octatrack's
- * dl_commit_begin does one), and stock bytes come from RAM as the OS has them at the join. */
+ * writes once no task is stopped inside a site (dl_commit_begin, below). Stock bytes come from RAM as
+ * the OS has them at the join, with the descriptor's shadow over the ranges the flashed build wrote. */
 extern char IMAGE_END[];                 /* mod.json's defsym: the main OS image's end, per OS version */
 #define IMAGE_LO 0x40000400u
 
@@ -173,13 +173,75 @@ void dl_site_saving(u32 addr, u32 len) { (void)addr; (void)len; }
 
 u32 telos_irq_off(void);
 void telos_irq_restore(u32 sr);
+u32 telos_sp(void);
 static u32 commit_sr;
 volatile u32 telos_sites_written;
+volatile u32 telos_commit_tries;         /* how many tries the last commit took (50 + 1: none quiet) */
+
+/* ---- quiescence: no task may be stopped inside a site ----------------------------------------------
+ * The OS's ten tasks are static: the kernel's TASK_CREATE (0x400012c8) is called from ten fixed sites
+ * with fixed TCBs and stacks (digiemu's boot log). A TCB keeps its saved stack pointer at +72, the
+ * Octatrack's RTOS layout. A site may be written only when no live stack word points strictly inside
+ * one: a task stopped there, or a return address into its middle. A task not created yet has a saved
+ * SP outside its stack and is skipped; the init task (the one TELOS runs in) is scanned from its live
+ * SP. TELOS_OS (mod.json's defsym) picks the OS version's table. */
+struct task { u32 tcb, stack, size; };
+static const struct task tasks_143[] = {
+    {0x4136f608, 0x4136f65c, 0x4000}, {0x4137365c, 0x413736b0, 0x4000}, {0x40525f08, 0x40525f5c, 0x1000},
+    {0x40527628, 0x4052767c, 0x0800}, {0x4137f94c, 0x4137b94c, 0x4000}, {0x4321e9a0, 0x419c50a0, 0x4000},
+    {0x4137b6b4, 0x413776b4, 0x4000}, {0x419962a8, 0x419962fc, 0x8000}, {0x4052a668, 0x4052aedc, 0x28000},
+    {0x41394e1c, 0x41394e70, 0x4000},
+};
+static const struct task tasks_144[] = {
+    {0x41370608, 0x4137065c, 0x4000}, {0x4137465c, 0x413746b0, 0x4000}, {0x40526f08, 0x40526f5c, 0x1000},
+    {0x40528628, 0x4052867c, 0x0800}, {0x4138094c, 0x4137c94c, 0x4000}, {0x4321f9a0, 0x419c60a0, 0x4000},
+    {0x4137c6b4, 0x413786b4, 0x4000}, {0x419972a8, 0x419972fc, 0x8000}, {0x4052b668, 0x4052bedc, 0x28000},
+    {0x41395e1c, 0x41395e70, 0x4000},
+};
+#define NTASKS 10
+#define INIT_TASK 1                      /* the init task's row: TELOS runs in it at ev_card_ready */
+extern char TELOS_OS[];                  /* 0x143 or 0x144 */
+
+static int inside(u32 v)
+{
+    u32 i, a, n;
+    for (i = 0; i < dl_sites_n(); i++)
+        if (dl_site_live(i, &a, &n) && v > a && v < a + n)
+            return 1;
+    return 0;
+}
+
+static int stack_busy(u32 lo, u32 hi)
+{
+    for (lo &= ~1u; lo + 4 <= hi; lo += 2)
+        if (inside(*(volatile u32 *)lo))
+            return 1;
+    return 0;
+}
 
 int dl_commit_begin(void)
 {
-    commit_sr = telos_irq_off();
-    return 1;
+    const struct task *t = (u32)TELOS_OS == 0x143 ? tasks_143 : tasks_144;
+    u32 tries, i;
+    for (tries = 0; tries < 50; tries++) {
+        int busy = 0;
+        commit_sr = telos_irq_off();
+        for (i = 0; i < NTASKS && !busy; i++) {
+            u32 lo, hi = t[i].stack + t[i].size;
+            lo = i == INIT_TASK ? telos_sp() : *(volatile u32 *)(t[i].tcb + 72);
+            if (lo < t[i].stack || lo >= hi)
+                continue;                /* not created yet, or not on its own stack */
+            busy = stack_busy(lo, hi);
+        }
+        telos_commit_tries = tries + 1;
+        if (!busy)
+            return 1;                    /* interrupts stay masked until dl_commit_end */
+        telos_irq_restore(commit_sr);
+        for (i = 0; i < 200000; i++)     /* let the other tasks move on */
+            __asm__ volatile("nop");
+    }
+    telos_commit_tries = 51;
+    return 0;
 }
 
 void dl_commit_end(void)
