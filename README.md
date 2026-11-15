@@ -63,20 +63,21 @@ links the new set; NO goes back to SETTINGS. PLAY, STOP and TEMPO stay the Digit
 clears it. A crash before then restarts the unit at once, and a boot that finds the guard links nothing
 and clears it: one safe boot, then the set again.
 
-**Projects and their mods.** A project saved under TELOS keeps the list of mods that were running (a
-hash of each mod's id and version, in the project's mod data). Loading it compares that list with what
-runs now, one screen each:
+**Projects and their mods** (core-dn1 5.5). Each project saved under TELOS keeps the list of mods that
+were running (a hash of each mod's id and version, in the project's mod data).
 
-| screen | when | YES | NO |
-|---|---|---|---|
-| LOAD FOR THIS PROJECT? | the project used mods that are in the store but off | turns them on and restarts | skips |
-| NOT ON THIS UNIT | the project used mods neither the store nor the firmware has (or the boot refused: `E<n>`) | OK | OK |
-| CHANGED SINCE SAVE | a mod runs at another version than the project's | continues anyway | opens MODS (TELOS) |
-| NOT IN THIS PROJECT | mods run now that the project was not saved with | OK | OK |
+- **LOAD PROJECT** (or CREATE NEW) first asks SAVE THE CURRENT PROJECT FIRST? YES saves it to its own slot,
+  then loads; NO loads. A project that cannot be saved (the write-protected presets) says so: YES loads
+  anyway, NO stays.
+- After the load, when the project's mods are not the ones running, **LOAD PROJECT MODS?** lists what YES
+  would do: `+` turn on, `-` turn off, `~` switch to the project's version (both in the store), and what it
+  cannot: `?` a mod not on the unit, `!` another version than the project's, or one the boot refused
+  (`E<n>`). YES writes the store and restarts; NO keeps the mods. With only `?` and `!` it says so (YES OK).
+- After that restart the unit says only what is still not as the project had it.
 
-The boot's own load of the last project says nothing, unless TELOS restarted to load a project's mods:
-then it says what is still missing. A project saved before this (or with the project's mod data full:
-the list goes last, after the pedals' settings) says nothing. Saving a project records what runs then.
+The boot's own load of the last project says nothing, nor does a project saved without the list (before
+this, or with the project's mod data full: the list goes last, after the pedals' settings). Saving a
+project records what runs then.
 
 ## What a TELOS mod may be
 

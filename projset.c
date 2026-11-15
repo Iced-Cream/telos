@@ -1,21 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* TELOS: a project's mods.
+/* TELOS: a project's mods (core-dn1 5.5).
  *
  * Every project save carries the mods that were running (a core_projdata block, "TLMS": per mod a hash of
- * its id and one of its version). When a project is loaded, TELOS compares that list with what runs now and
- * says, one screen each, in this order:
- *
- *   LOAD FOR THIS PROJECT   mods the project used that are in the store but off: YES turns them on and
- *                           restarts; NO goes on
- *   NOT ON THIS UNIT        mods the project used that neither the store nor the firmware has (or that the
- *                           boot refused: their E code)
- *   CHANGED SINCE SAVE      a mod running at another version than the project's: YES continues anyway, NO
- *                           opens MODS (TELOS)
- *   NOT IN THIS PROJECT     mods running now that the project was not saved with
- *
- * The boot's own load of the last project says nothing, unless TELOS restarted to load a project's mods:
- * then it says only what is still missing. A project saved without the block (before TELOS, or with the
- * project area full) says nothing either.
+ * its id and one of its version). LOAD PROJECT (and CREATE NEW) is held (ev_project_load) to ask SAVE THE
+ * CURRENT PROJECT FIRST? (core_project_save_active, then core_project_load_go). When the loaded project's
+ * mods differ from what runs, LOAD PROJECT MODS? lists the switches (+ on, - off, ~ the project's version)
+ * and what cannot be switched (? not on the unit, ! another version or refused); YES writes the store and
+ * restarts, and that boot says only what is still not as the project had it. The boot's own load of the
+ * last project says nothing otherwise, nor does a project without the block.
  *
  * The names come from TELOS's index on the +Drive (sectors +17..+31 of the store): the id, version and
  * title of every mod TELOS has met, in the store or built into the firmware, kept after a mod is removed
@@ -32,6 +24,8 @@
 #define KEY_STOP    12
 #define KEY_YES     13
 #define KEY_NO      14
+#define KEY_UP      15
+#define KEY_DOWN    16
 #define EV_KEY(ev)   (*(uint32_t *)((char *)(ev) + 12))
 #define EV_FLAGS(ev) (*(uint32_t *)((char *)(ev) + 16))
 
@@ -39,7 +33,6 @@ typedef int32_t (*text_fn)(void *bmp, const void *font, int32_t x, int32_t y, in
 #define TEXTF ((text_fn)fw_textf)
 
 extern const char core_desc[];
-void telos_page_open(void);
 extern volatile uint8_t telos_dir_busy;
 
 /* ---- the index ------------------------------------------------------------------------------------- */
@@ -310,130 +303,149 @@ static void run_build(void)
 }
 
 /* ---- the check ------------------------------------------------------------------------------------ */
-enum { P_LOAD, P_MISSING, P_CHANGED, P_NEW, P_N };
-#define LIST_MAX    12
-static struct {
-    u8 n;
-    u8 e[LIST_MAX];                      /* P_LOAD: store entries; others: unused */
-    char line[LIST_MAX][22];
-} pg[P_N];
-static int page = -1;                    /* the screen shown, or -1 */
-static u8 eat;                           /* a key whose release the dialog still takes */
-static u8 dirty;
+#define LINES       24
+static struct { u8 entry, on; } act[LINES];   /* store entries to switch, for YES */
+static u8 nact;
+static char lines[LINES][22];
+static u8 nlines, scroll;
+enum { M_NONE, M_SAVE_FIRST, M_SAVING, M_NOT_SAVED, M_MODS_ASK, M_MODS_INFO };
+static u8 mode;
+static u8 eat;                           /* a key whose release the screen still takes */
+static u8 dirty, wait_ticks;
 static u32 boot_ticks;
 static int boot_load;                    /* the next load is the boot's own */
-volatile u32 telos_pj[4];                /* [0] loads seen, [1] the last check's counts (4 bits each), [2] found */
+static u32 proj_pair[SET_MAX * 2], proj_n;    /* the loaded project's list, for YES's restart */
+volatile u32 telos_pj[4];                /* [0] loads, [1] lines | actions << 8 | mode << 16, [2] found, [3] 0x100 | saved */
 
-static void line(int p, const char *a, const char *b)
+static void line(char tag, const char *name, const char *tail)
 {
     char *d;
-    u32 k = 0;
-    if (pg[p].n >= LIST_MAX)
+    u32 k = 0, tl = 0, room;
+    if (nlines >= LINES)
         return;
-    d = pg[p].line[pg[p].n++];
-    while (*a && k < 21)
-        d[k++] = *a++;
-    if (b)
-        while (*b && k < 21)
-            d[k++] = *b++;
+    d = lines[nlines++];
+    while (tail && tail[tl])
+        tl++;
+    room = tl < 12 ? 21 - tl : 9;        /* the name is cut, so its tail shows */
+    d[k++] = tag;
+    while (*name && k < room)
+        d[k++] = *name++;
+    if (tail)
+        while (*tail && k < 21)
+            d[k++] = *tail++;
     d[k] = 0;
 }
 
-/* The store entry that holds the id (the saved version's if there is one), or -1. */
-static int store_of(u32 id, u32 ver)
+static void action(int entry, int on)
 {
-    int i, best = -1;
+    if (nact < LINES) {
+        act[nact].entry = (u8)entry;
+        act[nact++].on = (u8)on;
+    }
+}
+
+/* " 0.2>0.3" */
+static void vers(char *v, u32 from, u32 to, u32 id)
+{
+    const struct ix_entry *a = by_id(id, from), *b = by_id(id, to);
+    const char *x = a ? a->sver : "?", *y = b ? b->sver : "?";
+    u32 k = 0;
+    v[k++] = ' ';
+    while (*x && k < 9)
+        v[k++] = *x++;
+    v[k++] = '>';
+    while (*y && k < 18)
+        v[k++] = *y++;
+    v[k] = 0;
+}
+
+/* The store entry of (id, ver), any version when ver is 0, or -1. */
+static int entry_of(u32 id, u32 ver)
+{
+    int i;
     if (!telos_dir_ok)
         return -1;
     for (i = 0; i < telos_dir.n; i++) {
         const struct ix_entry *x = by_crc(telos_dir.e[i].crc);
-        if (x && x->id == id) {
-            if (x->ver == ver)
-                return i;
-            best = i;
-        }
+        if (x && x->id == id && (!ver || x->ver == ver))
+            return i;
     }
-    return best;
+    return -1;
 }
 
-static void next_page(void)
-{
-    for (page++; page < P_N && !pg[page].n; page++)
-        ;
-    if (page >= P_N)
-        page = -1;
-    dirty = 1;
-}
+static int loaded_now(int i) { return ran(i) && telos_boot_st[i].state == DL_ST_LOADED; }
 
-static void check(const u32 *pair, u32 n, int quiet_new)
+/* What it takes for the project's mods to run: the switches (act), and a line for each. issues_only: only
+ * what cannot be switched (after TELOS's own restart). */
+static void check(const u32 *pair, u32 n, int issues_only)
 {
     u32 i;
+    int k;
     struct set saved;
-    char e2[22];
-    for (i = 0; i < P_N; i++)
-        pg[i].n = 0;
+    char v[22];
+    nlines = nact = 0;
+    scroll = 0;
     saved.n = 0;
     for (i = 0; i < n && i < SET_MAX; i++)
         add(&saved, pair[2 * i], pair[2 * i + 1]);
-    for (i = 0; i < saved.n; i++) {
+    for (i = 0; i < saved.n; i++) {          /* the project's mods */
         u32 id = saved.id[i], ver = saved.ver[i];
-        int r = has(&run, id), s;
-        const struct ix_entry *x = by_id(id, ver), *any = x ? x : by_id(id, 0);
-        const char *name = any ? any->title : "UNKNOWN MOD";
-        if (r >= 0) {
-            const struct ix_entry *now = by_id(id, run.ver[r]);
-            if (run.ver[r] != ver) {     /* TONE+FX 4.3B>4.4 */
-                char v[22];
-                u32 k = 0;
-                const char *a = x ? x->sver : "?", *b = now ? now->sver : "?";
-                while (*a && k < 9)
-                    v[k++] = *a++;
-                v[k++] = '>';
-                while (*b && k < 19)
-                    v[k++] = *b++;
-                v[k] = 0;
-                line(P_CHANGED, name, 0);
-                line(P_CHANGED, "  ", v);
+        int r = has(&run, id), want = entry_of(id, ver);
+        const struct ix_entry *x = by_id(id, ver), *any = by_id(id, 0);
+        const char *name = x ? x->title : any ? any->title : "UNKNOWN MOD";
+        if (r >= 0 && run.ver[r] == ver)
+            continue;                        /* running as saved */
+        if (r >= 0) {                        /* running at another version */
+            int cur = entry_of(id, run.ver[r]);
+            if (want >= 0 && cur >= 0 && !issues_only) {
+                vers(v, run.ver[r], ver, id);    /* the store has the project's: switch */
+                action(cur, 0);
+                action(want, 1);
+                line('~', name, v);
+            } else {
+                vers(v, ver, run.ver[r], id);
+                line('!', name, v);
             }
             continue;
         }
-        s = store_of(id, ver);
-        if (s >= 0 && !(telos_dir.e[s].flags & TS_ON)) {
-            if (pg[P_LOAD].n < LIST_MAX)
-                pg[P_LOAD].e[pg[P_LOAD].n] = (u8)s;
-            line(P_LOAD, name, 0);
-        } else if (s >= 0 && ran(s) && telos_boot_st[s].state == DL_ST_REFUSED) {
-            u32 c = telos_boot_st[s].code;  /* on, and the boot refused it */
-            e2[0] = ' '; e2[1] = 'E';
-            e2[2] = (char)(c >= 10 ? '0' + c / 10 : '0' + c);
-            e2[3] = (char)(c >= 10 ? '0' + c % 10 : 0);
-            e2[4] = 0;
-            line(P_MISSING, name, e2);
-        } else if (s >= 0) {
-            line(P_MISSING, name, " +ON");  /* on from the next boot */
-        } else {
-            line(P_MISSING, name, 0);
+        if (want < 0)
+            want = entry_of(id, 0);          /* another version of it, at least */
+        if (want >= 0 && ran(want) && telos_boot_st[want].state == DL_ST_REFUSED) {
+            u32 c = telos_boot_st[want].code;
+            v[0] = ' '; v[1] = 'E';
+            v[2] = (char)('0' + (c >= 10 ? c / 10 : c));
+            v[3] = (char)(c >= 10 ? '0' + c % 10 : 0);
+            v[4] = 0;
+            line('!', name, v);              /* on, and the boot refused it */
+        } else if (want >= 0 && !issues_only) {
+            action(want, 1);
+            line('+', name, 0);
+        } else if (want < 0) {
+            line('?', name, " NOT HERE");
         }
     }
-    if (!quiet_new)
-        for (i = 0; i < run.n; i++)
-            if (has(&saved, run.id[i]) < 0) {
-                const struct ix_entry *x = by_id(run.id[i], run.ver[i]);
-                line(P_NEW, x ? x->title : "UNKNOWN MOD", 0);
+    if (!issues_only && telos_dir_ok)        /* the store's mods the project did not use: off */
+        for (k = 0; k < telos_dir.n; k++) {
+            const struct ix_entry *x;
+            if (!loaded_now(k))
+                continue;
+            x = by_crc(telos_dir.e[k].crc);
+            if (x && has(&saved, x->id) < 0) {
+                action(k, 0);
+                line('-', x->title, 0);
             }
-    telos_pj[1] = pg[0].n | pg[1].n << 4 | pg[2].n << 8 | pg[3].n << 12;
-    page = -1;
-    next_page();
+        }
+    mode = nact ? M_MODS_ASK : nlines ? M_MODS_INFO : M_NONE;
+    telos_pj[1] = nlines | (u32)nact << 8 | (u32)mode << 16;
+    dirty = 1;
 }
 
-static u32 last_pair[SET_MAX * 2], last_n;   /* the loaded project's list, for LOAD's restart */
-
-static void keep(void)
+static void keep_project(void)
 {
     u32 i;
-    last_n = pdata.n < SET_MAX ? pdata.n : SET_MAX;
-    for (i = 0; i < 2 * last_n; i++)
-        last_pair[i] = pdata.pair[i];
+    proj_n = pdata.n < SET_MAX ? pdata.n : SET_MAX;
+    for (i = 0; i < 2 * proj_n; i++)
+        proj_pair[i] = pdata.pair[i];
 }
 
 static void proj_loaded(int32_t found)
@@ -444,14 +456,14 @@ static void proj_loaded(int32_t found)
     boot_load = 0;
     ix_update();                         /* files sent since the boot */
     if (boot) {
-        if (ixh.pending) {               /* TELOS restarted to load a project's mods: what is still missing */
+        if (ixh.pending) {               /* TELOS restarted for a project's mods: what still is not right */
             check(ixh.pend, ixh.pending, 1);
             ixh.pending = 0;
             ix_save();
         }
     } else if (found && pdata.magic == 0x544d3031u) {
-        keep();
-        check(pdata.pair, pdata.n, 0);
+        keep_project();
+        check(proj_pair, proj_n, 0);
     }
     run_build();                         /* a save writes what runs */
 }
@@ -468,37 +480,46 @@ void telos_proj_boot(void)
     boot_ticks = 0;
 }
 
-/* LOAD FOR THIS PROJECT, YES: those on, the set to check after the restart kept, and restart. */
-static void load_and_restart(const u32 *pair, u32 n)
+/* ev_project_load (core-dn1 5.5): LOAD PROJECT or CREATE NEW, held: SAVE THE CURRENT PROJECT FIRST? */
+int32_t telos_proj_load(int32_t slot)
+{
+    (void)slot;
+    mode = M_SAVE_FIRST;
+    dirty = 1;
+    return 1;
+}
+
+/* YES on LOAD PROJECT MODS?: the switches, and the project's list kept for the check after the restart. */
+static void apply_and_restart(void)
 {
     u32 i;
     telos_dir_busy = 1;
-    for (i = 0; i < pg[P_LOAD].n; i++)
-        telos_dir.e[pg[P_LOAD].e[i]].flags |= TS_ON;
+    for (i = 0; i < nact; i++) {
+        if (act[i].on)
+            telos_dir.e[act[i].entry].flags |= TS_ON;
+        else
+            telos_dir.e[act[i].entry].flags &= (u8)~TS_ON;
+    }
     if (telos_dir_write() != 0) {
         telos_dir_busy = 0;
         return;
     }
     telos_dir_busy = 0;
-    ixh.pending = n < PEND_MAX ? n : PEND_MAX;
+    ixh.pending = proj_n < PEND_MAX ? proj_n : PEND_MAX;
     for (i = 0; i < 2 * ixh.pending; i++)
-        ixh.pend[i] = pair[i];
+        ixh.pend[i] = proj_pair[i];
     ix_save();
     core_restart();
 }
 
-
 /* ---- the screens ---------------------------------------------------------------------------------- */
-static const char *const titles[P_N] = { "LOAD FOR THIS PROJECT?", "NOT ON THIS UNIT", "CHANGED SINCE SAVE",
-                                         "NOT IN THIS PROJECT" };
-static const char *const feet[P_N] = { "YES LOAD+RESTART  NO SKIP", "YES OK", "YES CONTINUE  NO MODS",
-                                       "YES OK" };
+#define SHOWN 4
 
 int telos_proj_key(void *brain, void *ev)
 {
     uint32_t key = EV_KEY(ev), fl = EV_FLAGS(ev);
     (void)brain;
-    if (page < 0) {
+    if (mode == M_NONE) {
         if (eat && key == eat) {
             if (!(fl & 1))
                 eat = 0;
@@ -508,20 +529,37 @@ int telos_proj_key(void *brain, void *ev)
     }
     if (key == KEY_PLAY || key == KEY_STOP || key == KEY_TEMPO)
         return 0;
-    if (!(fl & 1) || (fl & 8))
-        return 1;                        /* releases and repeats */
-    if (key != KEY_YES && key != KEY_NO)
-        return 1;
-    eat = (u8)key;
-    if (page == P_LOAD && key == KEY_YES) {
-        load_and_restart(last_pair, last_n);
-    } else if (page == P_CHANGED && key == KEY_NO) {
-        page = -1;
+    if (!(fl & 1))
+        return 1;                        /* releases */
+    if (key == KEY_UP || key == KEY_DOWN) {
+        if (key == KEY_UP && scroll)
+            scroll--;
+        if (key == KEY_DOWN && scroll + SHOWN < nlines)
+            scroll++;
         dirty = 1;
-        telos_page_open();
         return 1;
     }
-    next_page();
+    if ((fl & 8) || (key != KEY_YES && key != KEY_NO) || mode == M_SAVING)
+        return 1;
+    eat = (u8)key;
+    dirty = 1;
+    if (mode == M_NOT_SAVED) {          /* YES loads anyway, NO keeps the current project */
+        mode = M_NONE;
+        core_project_load_go(key == KEY_YES);
+    } else if (mode == M_SAVE_FIRST) {
+        if (key == KEY_YES) {
+            mode = M_SAVING;             /* the tick saves once SAVING is on the screen */
+            wait_ticks = 0;
+        } else {
+            mode = M_NONE;
+            core_project_load_go(1);
+        }
+    } else if (mode == M_MODS_ASK && key == KEY_YES) {
+        apply_and_restart();
+        mode = M_NONE;
+    } else {
+        mode = M_NONE;
+    }
     return 1;
 }
 
@@ -529,22 +567,52 @@ void telos_proj_draw(void *bmp, void *ctrl)
 {
     int i, y;
     (void)ctrl;
-    if (page < 0)
+    if (mode == M_NONE)
         return;
     fw_fillrect(bmp, 0, 0, 127, 63, 0);
-    TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", titles[page]);
+    if (mode == M_NOT_SAVED) {
+        TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", "LOAD PROJECT");
+        fw_fillrect(bmp, 0, 54, 127, 63, -1);
+        TEXTF(bmp, fw_font5, 3, 34, -1, "%s", "THE CURRENT PROJECT");
+        TEXTF(bmp, fw_font5, 3, 24, -1, "%s", "WAS NOT SAVED");
+        TEXTF(bmp, fw_font5, 3, 2, -1, "%s", "YES LOAD ANYWAY  NO CANCEL");
+        return;
+    }
+    if (mode == M_SAVE_FIRST || mode == M_SAVING) {
+        TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", "LOAD PROJECT");
+        fw_fillrect(bmp, 0, 54, 127, 63, -1);
+        TEXTF(bmp, fw_font5, 3, 34, -1, "%s", mode == M_SAVING ? "SAVING THE CURRENT" : "SAVE THE CURRENT");
+        TEXTF(bmp, fw_font5, 3, 24, -1, "%s", mode == M_SAVING ? "PROJECT..." : "PROJECT FIRST?");
+        if (mode == M_SAVE_FIRST)
+            TEXTF(bmp, fw_font5, 3, 2, -1, "%s", "YES SAVE  NO DON'T SAVE");
+        return;
+    }
+    TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", mode == M_MODS_ASK ? "LOAD PROJECT MODS?" : "PROJECT MODS");
     fw_fillrect(bmp, 0, 54, 127, 63, -1);
-    for (i = 0, y = 44; i < pg[page].n && i < 4; i++, y -= 10)
-        TEXTF(bmp, fw_font5, 3, y, -1, "%s", pg[page].line[i]);
-    if (pg[page].n > 4)
-        TEXTF(bmp, fw_font5, 90, 14, -1, "+%d", pg[page].n - 4);
-    TEXTF(bmp, fw_font5, 3, 2, -1, "%s", feet[page]);
+    for (i = scroll, y = 44; i < nlines && i < scroll + SHOWN; i++, y -= 10)
+        TEXTF(bmp, fw_font5, 3, y, -1, "%s", lines[i]);
+    if (nlines > SHOWN) {                /* the scroll bar */
+        int h = 40 * SHOWN / nlines, p = (40 - h) * scroll / (nlines - SHOWN);
+        fw_fillrect(bmp, 126, 51 - p - h, 127, 51 - p, -1);
+    }
+    TEXTF(bmp, fw_font5, 3, 2, -1, "%s", mode == M_MODS_ASK ? "YES LOAD+RESTART  NO KEEP" : "YES OK");
 }
 
 void telos_proj_tick(void *ctrl)
 {
     if (boot_load && ++boot_ticks > 300)
         boot_load = 0;                   /* no load at boot (a new unit): the next one is the user's */
+    if (mode == M_SAVING && ++wait_ticks > 3) {
+        u32 ok = (u32)core_project_save_active();   /* a few seconds (0: write-protected, the presets) */
+        telos_pj[3] = 0x100u | ok;
+        dirty = 1;
+        if (ok) {
+            mode = M_NONE;
+            core_project_load_go(1);     /* then the held load */
+        } else {
+            mode = M_NOT_SAVED;
+        }
+    }
     if (dirty) {
         dirty = 0;
         *((unsigned char *)ctrl + 0x20) = 1;
