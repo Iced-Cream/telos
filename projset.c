@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* TELOS: a project's mods (core-dn1 5.5).
+/* TELOS: a project's mods.
  *
  * Every project save carries the mods that were running (a core_projdata block, "TLMS": per mod a hash of
- * its id and one of its version). LOAD PROJECT (and CREATE NEW) is held (ev_project_load) to ask SAVE THE
- * CURRENT PROJECT FIRST? (core_project_save_active, then core_project_load_go). When the loaded project's
- * mods differ from what runs, LOAD PROJECT MODS? lists the switches (+ on, - off, ~ the project's version)
+ * its id and one of its version). When a loaded project's mods differ from what runs, LOAD PROJECT MODS? lists the switches (+ on, - off, ~ the project's version)
  * and what cannot be switched (? not on the unit, ! another version or refused); YES writes the store and
  * restarts, and that boot says only what is still not as the project had it. The boot's own load of the
  * last project says nothing otherwise, nor does a project without the block.
@@ -308,14 +306,14 @@ static struct { u8 entry, on; } act[LINES];   /* store entries to switch, for YE
 static u8 nact;
 static char lines[LINES][22];
 static u8 nlines, scroll;
-enum { M_NONE, M_SAVE_FIRST, M_SAVING, M_NOT_SAVED, M_MODS_ASK, M_MODS_INFO };
+enum { M_NONE, M_MODS_ASK, M_MODS_INFO };
 static u8 mode;
 static u8 eat;                           /* a key whose release the screen still takes */
-static u8 dirty, wait_ticks;
+static u8 dirty;
 static u32 boot_ticks;
 static int boot_load;                    /* the next load is the boot's own */
 static u32 proj_pair[SET_MAX * 2], proj_n;    /* the loaded project's list, for YES's restart */
-volatile u32 telos_pj[4];                /* [0] loads, [1] lines | actions << 8 | mode << 16, [2] found, [3] 0x100 | saved */
+volatile u32 telos_pj[4];                /* [0] loads, [1] lines | actions << 8 | mode << 16, [2] found */
 
 static void line(char tag, const char *name, const char *tail)
 {
@@ -480,15 +478,6 @@ void telos_proj_boot(void)
     boot_ticks = 0;
 }
 
-/* ev_project_load (core-dn1 5.5): LOAD PROJECT or CREATE NEW, held: SAVE THE CURRENT PROJECT FIRST? */
-int32_t telos_proj_load(int32_t slot)
-{
-    (void)slot;
-    mode = M_SAVE_FIRST;
-    dirty = 1;
-    return 1;
-}
-
 /* YES on LOAD PROJECT MODS?: the switches, and the project's list kept for the check after the restart. */
 static void apply_and_restart(void)
 {
@@ -539,22 +528,11 @@ int telos_proj_key(void *brain, void *ev)
         dirty = 1;
         return 1;
     }
-    if ((fl & 8) || (key != KEY_YES && key != KEY_NO) || mode == M_SAVING)
+    if ((fl & 8) || (key != KEY_YES && key != KEY_NO))
         return 1;
     eat = (u8)key;
     dirty = 1;
-    if (mode == M_NOT_SAVED) {          /* YES loads anyway, NO keeps the current project */
-        mode = M_NONE;
-        core_project_load_go(key == KEY_YES);
-    } else if (mode == M_SAVE_FIRST) {
-        if (key == KEY_YES) {
-            mode = M_SAVING;             /* the tick saves once SAVING is on the screen */
-            wait_ticks = 0;
-        } else {
-            mode = M_NONE;
-            core_project_load_go(1);
-        }
-    } else if (mode == M_MODS_ASK && key == KEY_YES) {
+    if (mode == M_MODS_ASK && key == KEY_YES) {
         apply_and_restart();
         mode = M_NONE;
     } else {
@@ -570,23 +548,6 @@ void telos_proj_draw(void *bmp, void *ctrl)
     if (mode == M_NONE)
         return;
     fw_fillrect(bmp, 0, 0, 127, 63, 0);
-    if (mode == M_NOT_SAVED) {
-        TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", "LOAD PROJECT");
-        fw_fillrect(bmp, 0, 54, 127, 63, -1);
-        TEXTF(bmp, fw_font5, 3, 34, -1, "%s", "THE CURRENT PROJECT");
-        TEXTF(bmp, fw_font5, 3, 24, -1, "%s", "WAS NOT SAVED");
-        TEXTF(bmp, fw_font5, 3, 2, -1, "%s", "YES LOAD ANYWAY  NO CANCEL");
-        return;
-    }
-    if (mode == M_SAVE_FIRST || mode == M_SAVING) {
-        TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", "LOAD PROJECT");
-        fw_fillrect(bmp, 0, 54, 127, 63, -1);
-        TEXTF(bmp, fw_font5, 3, 34, -1, "%s", mode == M_SAVING ? "SAVING THE CURRENT" : "SAVE THE CURRENT");
-        TEXTF(bmp, fw_font5, 3, 24, -1, "%s", mode == M_SAVING ? "PROJECT..." : "PROJECT FIRST?");
-        if (mode == M_SAVE_FIRST)
-            TEXTF(bmp, fw_font5, 3, 2, -1, "%s", "YES SAVE  NO DON'T SAVE");
-        return;
-    }
     TEXTF(bmp, fw_font_title, 2, 56, -1, "%s", mode == M_MODS_ASK ? "LOAD PROJECT MODS?" : "PROJECT MODS");
     fw_fillrect(bmp, 0, 54, 127, 63, -1);
     for (i = scroll, y = 44; i < nlines && i < scroll + SHOWN; i++, y -= 10)
@@ -602,17 +563,6 @@ void telos_proj_tick(void *ctrl)
 {
     if (boot_load && ++boot_ticks > 300)
         boot_load = 0;                   /* no load at boot (a new unit): the next one is the user's */
-    if (mode == M_SAVING && ++wait_ticks > 3) {
-        u32 ok = (u32)core_project_save_active();   /* a few seconds (0: write-protected, the presets) */
-        telos_pj[3] = 0x100u | ok;
-        dirty = 1;
-        if (ok) {
-            mode = M_NONE;
-            core_project_load_go(1);     /* then the held load */
-        } else {
-            mode = M_NOT_SAVED;
-        }
-    }
     if (dirty) {
         dirty = 0;
         *((unsigned char *)ctrl + 0x20) = 1;

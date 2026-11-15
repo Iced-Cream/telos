@@ -93,15 +93,10 @@
    "event": "ev_tick",
    "fn": "telos_proj_tick",
    "order": 91
-  },
-  {
-   "event": "ev_project_load",
-   "fn": "telos_proj_load",
-   "order": 10
   }
  ],
  "resources": {
-  "core": "5.5",
+  "core": "5.0",
   "names": [
    "projdata:TLMS"
   ]

@@ -63,12 +63,10 @@ links the new set; NO goes back to SETTINGS. PLAY, STOP and TEMPO stay the Digit
 clears it. A crash before then restarts the unit at once, and a boot that finds the guard links nothing
 and clears it: one safe boot, then the set again.
 
-**Projects and their mods** (core-dn1 5.5). Each project saved under TELOS keeps the list of mods that
-were running (a hash of each mod's id and version, in the project's mod data).
+**Projects and their mods.** Each project saved under TELOS keeps the list of mods that were running (a
+hash of each mod's id and version, in the project's mod data). Loading one (the Digitone asks to save
+the current project first, as stock does):
 
-- **LOAD PROJECT** (or CREATE NEW) first asks SAVE THE CURRENT PROJECT FIRST? YES saves it to its own slot,
-  then loads; NO loads. A project that cannot be saved (the write-protected presets) says so: YES loads
-  anyway, NO stays.
 - After the load, when the project's mods are not the ones running, **LOAD PROJECT MODS?** lists what YES
   would do: `+` turn on, `-` turn off, `~` switch to the project's version (both in the store), and what it
   cannot: `?` a mod not on the unit, `!` another version than the project's, or one the boot refused
