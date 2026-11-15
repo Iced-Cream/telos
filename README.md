@@ -63,6 +63,21 @@ links the new set; NO goes back to SETTINGS. PLAY, STOP and TEMPO stay the Digit
 clears it. A crash before then restarts the unit at once, and a boot that finds the guard links nothing
 and clears it: one safe boot, then the set again.
 
+**Projects and their mods.** A project saved under TELOS keeps the list of mods that were running (a
+hash of each mod's id and version, in the project's mod data). Loading it compares that list with what
+runs now, one screen each:
+
+| screen | when | YES | NO |
+|---|---|---|---|
+| LOAD FOR THIS PROJECT? | the project used mods that are in the store but off | turns them on and restarts | skips |
+| NOT ON THIS UNIT | the project used mods neither the store nor the firmware has (or the boot refused: `E<n>`) | OK | OK |
+| CHANGED SINCE SAVE | a mod runs at another version than the project's | continues anyway | opens MODS (TELOS) |
+| NOT IN THIS PROJECT | mods run now that the project was not saved with | OK | OK |
+
+The boot's own load of the last project says nothing, unless TELOS restarted to load a project's mods:
+then it says what is still missing. A project saved before this (or with the project's mod data full:
+the list goes last, after the pedals' settings) says nothing. Saving a project records what runs then.
+
 ## What a TELOS mod may be
 
 A +Drive mod (elekloader's docs/FORMAT.md, "+Drive mods"): `.run` and `.bss` only, no sites, entries
@@ -78,8 +93,9 @@ erases only below that, and the smallest eMMC part the firmware accepts ends at 
 project slot, so it never shows in Transfer. It holds up to 63 files.
 
 The directory has two copies, each with a sequence number and a CRC-32. The newer valid copy counts, and
-a write goes to the other one, so a write cut short by a power loss leaves the older copy standing. The
-layout is in `telos.h`.
+a write goes to the other one, so a write cut short by a power loss leaves the older copy standing.
+Sectors +17 to +31 hold TELOS's index of the mods it has met (id, version, title), which names a mod a
+project needs after the mod is gone. The layout is in `telos.h` and `projset.c`.
 
 ## How it works
 

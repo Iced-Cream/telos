@@ -446,6 +446,8 @@ static void boot(void)
             ((void (*)(void))dl_inits[i])();
 }
 
+void telos_proj_boot(void);
+
 void telos_card_ready(int32_t status)
 {
     if (status != 0) {
@@ -454,4 +456,5 @@ void telos_card_ready(int32_t status)
         return;
     }
     boot();
+    telos_proj_boot();                   /* projset.c: the index, and what runs, before the project loads */
 }

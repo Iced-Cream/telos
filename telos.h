@@ -8,6 +8,7 @@
  *   sectors +0..+7    directory copy A (4096 bytes)
  *   sectors +8..+15   directory copy B
  *   sector  +16       the crash guard: "ARMD" while a boot with mods has not run 10 s
+ *   sectors +17..+31  the index of mods TELOS has met, for a project's mods (projset.c)
  *   sectors +32..     the files, each from a sector of its own, in the order the directory gives
  *
  * A directory: +0 "TELS", +4 u16 version (1), +6 u16 entries, +8 u32 sequence, +12 u32 CRC-32
