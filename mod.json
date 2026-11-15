@@ -13,8 +13,7 @@
    "defsym": {
     "STR_CTOR": "0x4018afc8",
     "ICON_VTABLE": "0x401ccd7c",
-    "IMAGE_END": "0x4029c4b0",
-    "TELOS_OS": "0x144"
+    "IMAGE_END": "0x4029c4b0"
    }
   }
  },
@@ -36,8 +35,7 @@
  "defsym": {
   "STR_CTOR": "0x4018ac7c",
   "ICON_VTABLE": "0x401cc9ac",
-  "IMAGE_END": "0x4029b4b0",
-  "TELOS_OS": "0x143"
+  "IMAGE_END": "0x4029b4b0"
  },
  "subscribe": [
   {
@@ -89,6 +87,7 @@
  ],
  "weak": [
   "core_param_install",
-  "core_stock_info"
+  "core_stock_info",
+  "core_tasks"
  ]
 }

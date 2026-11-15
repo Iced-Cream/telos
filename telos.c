@@ -171,12 +171,12 @@ int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= (u3
 /* Stock bytes: core-dn1 5.4 copies the OS image before the OS runs (core_stock_info: where, bytes, from
  * 0x40000400); the OS changes some of its data before the join, so the copy is read where it covers. On
  * an older core, RAM as it is at the join. The descriptor's shadow goes over either (dlink.c). */
-extern const u32 core_stock_info[2] __attribute__((weak));
+extern const struct core_stock_info core_stock_info __attribute__((weak));   /* core3.h */
 
 void dl_stock_read(u8 *dst, u32 a, u32 n)
 {
-    if (core_stock_info && a >= IMAGE_LO && a + n <= IMAGE_LO + core_stock_info[1])
-        dl_memcpy(dst, (const void *)(core_stock_info[0] + (a - IMAGE_LO)), n);
+    if (&core_stock_info && a >= IMAGE_LO && a + n <= IMAGE_LO + core_stock_info.len)
+        dl_memcpy(dst, (const void *)(core_stock_info.at + (a - IMAGE_LO)), n);
     else
         dl_memcpy(dst, (const void *)a, n);
 }
@@ -190,28 +190,13 @@ volatile u32 telos_sites_written;
 volatile u32 telos_commit_tries;         /* how many tries the last commit took (50 + 1: none quiet) */
 
 /* ---- quiescence: no task may be stopped inside a site ----------------------------------------------
- * The OS's ten tasks are static: the kernel's TASK_CREATE (0x400012c8) is called from ten fixed sites
- * with fixed TCBs and stacks (digiemu's boot log). A TCB keeps its saved stack pointer at +72, the
- * Octatrack's RTOS layout. A site may be written only when no live stack word points strictly inside
- * one: a task stopped there, or a return address into its middle. A task not created yet has a saved
- * SP outside its stack and is skipped; the init task (the one TELOS runs in) is scanned from its live
- * SP. TELOS_OS (mod.json's defsym) picks the OS version's table. */
-struct task { u32 tcb, stack, size; };
-static const struct task tasks_143[] = {
-    {0x4136f608, 0x4136f65c, 0x4000}, {0x4137365c, 0x413736b0, 0x4000}, {0x40525f08, 0x40525f5c, 0x1000},
-    {0x40527628, 0x4052767c, 0x0800}, {0x4137f94c, 0x4137b94c, 0x4000}, {0x4321e9a0, 0x419c50a0, 0x4000},
-    {0x4137b6b4, 0x413776b4, 0x4000}, {0x419962a8, 0x419962fc, 0x8000}, {0x4052a668, 0x4052aedc, 0x28000},
-    {0x41394e1c, 0x41394e70, 0x4000},
-};
-static const struct task tasks_144[] = {
-    {0x41370608, 0x4137065c, 0x4000}, {0x4137465c, 0x413746b0, 0x4000}, {0x40526f08, 0x40526f5c, 0x1000},
-    {0x40528628, 0x4052867c, 0x0800}, {0x4138094c, 0x4137c94c, 0x4000}, {0x4321f9a0, 0x419c60a0, 0x4000},
-    {0x4137c6b4, 0x413786b4, 0x4000}, {0x419972a8, 0x419972fc, 0x8000}, {0x4052b668, 0x4052bedc, 0x28000},
-    {0x41395e1c, 0x41395e70, 0x4000},
-};
-#define NTASKS 10
-#define INIT_TASK 1                      /* the init task's row: TELOS runs in it at ev_card_ready */
-extern char TELOS_OS[];                  /* 0x143 or 0x144 */
+ * The OS's ten tasks are static, with fixed TCBs and stacks: core-dn1 5.4 lists them (core_tasks: the
+ * count, the init task's row, the TCB's saved-SP offset, then TCB, stack and size per task). A site may
+ * be written only when no live stack word points strictly inside one: a task stopped there, or a return
+ * address into its middle. A task not created yet has a saved SP outside its stack and is skipped; the
+ * init task (the one TELOS runs in) is scanned from its live SP. Without core_tasks (an older core)
+ * nothing tells, so no site is written (26). */
+extern const struct core_tasks core_tasks __attribute__((weak));   /* core3.h */
 
 static int inside(u32 v)
 {
@@ -232,14 +217,20 @@ static int stack_busy(u32 lo, u32 hi)
 
 int dl_commit_begin(void)
 {
-    const struct task *t = (u32)TELOS_OS == 0x143 ? tasks_143 : tasks_144;
+    const struct core_tasks *k = &core_tasks;
+    const struct core_task *t;
     u32 tries, i;
+    if (!k) {
+        telos_commit_tries = 0;
+        return 0;
+    }
+    t = k->t;
     for (tries = 0; tries < 50; tries++) {
         int busy = 0;
         commit_sr = telos_irq_off();
-        for (i = 0; i < NTASKS && !busy; i++) {
+        for (i = 0; i < k->n && !busy; i++) {
             u32 lo, hi = t[i].stack + t[i].size;
-            lo = i == INIT_TASK ? telos_sp() : *(volatile u32 *)(t[i].tcb + 72);
+            lo = i == k->init ? telos_sp() : *(volatile u32 *)(t[i].tcb + k->sp_at);
             if (lo < t[i].stack || lo >= hi)
                 continue;                /* not created yet, or not on its own stack */
             busy = stack_busy(lo, hi);
