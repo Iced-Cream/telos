@@ -2,7 +2,10 @@
 
 Branch `poc` here, with elekloader branch `telos-poc` (local, not pushed; TELOS vendors its boot linker from it). All run in digiemu's emulator
 on OS 1.44. The hardware pack `digitaktresearch/telos-poc-hw` (TP2B, a081dba5) has all of it: in the emulator ten
-mods, from every addition, load from the store in one boot. It has not been on a unit yet.
+mods, from every addition, load from the store in one boot. **On a unit (OS 1.44, 2026-11-15)** each step
+loaded from the store and worked: PRG, CHK and LOOP; GAIN, SINE and EUCLID (`loaded`); digihealth's
+SYSTEM INFO; DigiTide; Mutiny and Tone+FX (a cursory test, with the other mods off). Not yet on a unit:
+all thirteen in one boot.
 
 | | what was missing | the POC | shown in the emulator | left for a release |
 |---|---|---|---|---|
