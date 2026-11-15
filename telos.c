@@ -84,8 +84,16 @@ s32 dl_read_file(const char *name, u8 *buf, u32 max)
         return -2;
     if (e->sector < TS_DATA || e->sector + (e->size + 511) / 512 > TS_SECTORS)
         return -3;
-    if (e->size && fw_card_read(TS_SECTOR + e->sector, e->size, buf) != 0)
-        return -3;
+    {
+        u32 at, k;                       /* 16 KB at a time: a large file (DigiTide's 131 KB) read in one
+                                          * call went past 64 KB, which the card layer splits by recursion,
+                                          * and in digiemu's cold boot never finished in time */
+        for (at = 0; at < e->size; at += k) {
+            k = e->size - at < 0x4000u ? e->size - at : 0x4000u;
+            if (fw_card_read(TS_SECTOR + e->sector + at / 512, k, buf + at) != 0)
+                return -3;
+        }
+    }
     return (s32)e->size;
 }
 

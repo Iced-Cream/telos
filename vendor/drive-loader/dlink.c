@@ -44,6 +44,10 @@ struct local {
 
 struct list { u16 first, n; };
 
+#ifdef DL_REGIONS
+#define DL_REGIONS_MAX 64                    /* regions of all the mods in one link */
+#endif
+
 struct dmod {
     u16 choice;                          /* its line in /mods/active (its status record) */
     u8 alive, done;
@@ -57,6 +61,9 @@ struct dmod {
     u32 init_off;
 #ifdef DL_SITES
     u16 site_first, site_n;              /* its sites in L.sites */
+#endif
+#ifdef DL_REGIONS
+    u16 reg_first, reg_n;                /* its regions in L.regs */
 #endif
 };
 
@@ -131,6 +138,10 @@ static struct {
     struct dsite *sites;
     u8 *sdata;
     u32 nsites, sdata_n;
+#endif
+#ifdef DL_REGIONS
+    struct { u32 lo, hi; } regs[DL_REGIONS_MAX];   /* the mods' regions, [lo, hi) */
+    u32 nregs;
 #endif
     u32 crc_table[256];
 } L;
@@ -980,11 +991,48 @@ static int scan(struct dmod *m, const u8 *buf, u32 len, const char **what)
             if (!js_key(&j, &s, &n))
                 return DL_R_FORMAT;
             if (js_eq(s, n, "regions")) {
+#ifdef DL_REGIONS
+                int rf = 1;
+                m->reg_first = (u16)L.nregs;
+                m->reg_n = 0;
+                if (!js_open(&j, '['))
+                    return DL_R_FORMAT;
+                while (js_next(&j, ']', &rf)) {    /* each {"name", "lo", "hi"} */
+                    int of = 1;
+                    s32 lo = 0, hi = 0;
+                    if (!js_open(&j, '{'))
+                        return DL_R_FORMAT;
+                    while (js_next(&j, '}', &of)) {
+                        const char *ks;
+                        u32 kn;
+                        if (!js_key(&j, &ks, &kn))
+                            return DL_R_FORMAT;
+                        if (js_eq(ks, kn, "lo")) {
+                            if (!js_int(&j, &lo))
+                                return DL_R_FORMAT;
+                        } else if (js_eq(ks, kn, "hi")) {
+                            if (!js_int(&j, &hi))
+                                return DL_R_FORMAT;
+                        } else if (!js_skip(&j)) {
+                            return DL_R_FORMAT;
+                        }
+                    }
+                    if ((u32)hi <= (u32)lo)
+                        return DL_R_FORMAT;
+                    if (L.nregs >= DL_REGIONS_MAX)
+                        return DL_R_LIMIT;
+                    L.regs[L.nregs].lo = (u32)lo;
+                    L.regs[L.nregs].hi = (u32)hi;
+                    L.nregs++;
+                    m->reg_n++;
+                }
+#else
                 if (!empty(j.p, buf, len)) {
                     *what = "regions";
                     return DL_R_FEATURE;
                 }
                 js_skip(&j);
+#endif
             } else if (js_eq(s, n, "names")) {
                 if (!read_list(j.p, buf, len, &m->names))
                     return DL_R_LIMIT;
@@ -1175,6 +1223,54 @@ static int name_claimed(const char *name, const struct dmod *self)
     return 0;
 }
 
+#ifdef DL_REGIONS
+/* A region of m's that overlaps one the flashed build claims (the descriptor's claims of kind 2,
+ * named "<lo> <hi> <name>" in hex) or one of an earlier living mod in id order. -> the other's
+ * name (a static buffer), or 0. */
+static const char *region_clash(const struct dmod *self)
+{
+    static char who[32];
+    u32 r, i;
+    int k;
+    for (r = self->reg_first; r < (u32)self->reg_first + self->reg_n; r++) {
+        u32 lo = L.regs[r].lo, hi = L.regs[r].hi;
+        for (i = 0; i < n_claims(); i++) {
+            const char *p = pool(D32(o_claim(i) + 4));
+            s32 a = 0, b = 0;
+            u32 q = 0;
+            if (D16(o_claim(i)) != 2)
+                continue;
+            while (p[q] && p[q] != ' ')
+                q++;
+            js_parse_int(p, q, &a);
+            p += q + (p[q] == ' ');
+            q = 0;
+            while (p[q] && p[q] != ' ')
+                q++;
+            js_parse_int(p, q, &b);
+            if (lo < (u32)b && (u32)a < hi)
+                return module_name(D16(o_claim(i) + 2));
+        }
+        for (k = 0; k < L.nmods; k++) {
+            const struct dmod *o = &L.mods[L.order[k]];
+            u32 x;
+            if (o == self)
+                break;
+            if (!o->alive)
+                continue;
+            for (x = o->reg_first; x < (u32)o->reg_first + o->reg_n; x++)
+                if (lo < L.regs[x].hi && L.regs[x].lo < hi) {
+                    u32 n = dl_strlen(astr(o->id));
+                    dl_memcpy(who, astr(o->id), n < 31 ? n : 31);
+                    who[n < 31 ? n : 31] = 0;
+                    return who;
+                }
+        }
+    }
+    return 0;
+}
+#endif
+
 static int known_global(const char *name)
 {
     return global(dl_hash(name, dl_strlen(name))) != 0;
@@ -1298,6 +1394,16 @@ static int check_round(void)
             refused++;
             continue;
         }
+#ifdef DL_REGIONS
+        {
+            const char *who = region_clash(m);
+            if (who) {
+                refuse(m, DL_R_REGION, 0, who);
+                refused++;
+                continue;
+            }
+        }
+#endif
         for (q = 0; q < m->imports.n; q++) {
             const char *nm = L.arena + L.lists[m->imports.first + q];
             if (!known_global(nm) && !in_list(&m->weak, nm))

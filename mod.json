@@ -29,7 +29,8 @@
  "cflags": [
   "-Os",
   "-fno-ipa-sra",
-  "-DDL_SITES"
+  "-DDL_SITES",
+  "-DDL_REGIONS"
  ],
  "defsym": {
   "STR_CTOR": "0x4018ac7c",

@@ -57,6 +57,9 @@ enum {
     DL_R_FLASHED = 22,                   /* a site overlaps a range the flashed build wrote (detail: where) */
     DL_R_STOCK = 24,                     /* a site's bytes are not stock's on the unit (detail: where) */
     DL_R_BUSY = 26,                      /* no quiet moment to write the sites in */
+    /* DL_REGIONS (TELOS on the Digitone mk1, POC): mods that claim regions of the bulk area */
+    DL_R_REGION = 27,                    /* a region overlaps one the flashed build or an earlier mod
+                                          * claims (detail: the other's name) */
 };
 
 /* Why nothing was linked (dl_skip_reason). */
