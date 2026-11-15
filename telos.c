@@ -168,6 +168,15 @@ void dl_sha256(const u8 *p, u32 n, u8 out[32])
 
 int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= (u32)IMAGE_END; }
 
+/* A mod's region must lie inside one of the device's free areas, as a flashed mod's must (elekloader's
+ * devices/digitone_mk1.py, areas: the same on 1.43 and 1.44). The linker's scratch at 0x44000000 and
+ * core's stock copy at 0x44200000 are only used during the link, before any mod runs. */
+int dl_region_ok(u32 lo, u32 hi)
+{
+    return (lo >= 0x44000000u && hi <= 0x47be0000u)       /* bulk */
+        || (lo >= 0x47be0000u && hi <= 0x47c00000u);      /* ddr */
+}
+
 /* Stock bytes: core-dn1 5.4 copies the OS image before the OS runs (core_stock_info: where, bytes, from
  * 0x40000400); the OS changes some of its data before the join, so the copy is read where it covers. On
  * an older core, RAM as it is at the join. The descriptor's shadow goes over either (dlink.c). */
