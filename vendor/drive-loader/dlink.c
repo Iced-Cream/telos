@@ -163,10 +163,12 @@ u32 dl_inits_n;
 u32 dl_used_lo, dl_used_hi;
 
 /* ---- small helpers ---------------------------------------------------------------------- */
+#ifdef DL_SITES
 /* Out of line: inlined into a loop, GCC can make `move.b (a0)+,(0,a0,a1)` of it, the same
  * register post-incremented as the source and indexing the destination, which octabam's
  * ColdFire emulator reads with the incremented a0 (every byte one address late). */
 __attribute__((noinline))
+#endif
 void dl_memcpy(void *d, const void *s, u32 n)
 {
     u8 *a = d;
