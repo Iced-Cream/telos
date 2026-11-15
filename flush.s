@@ -24,3 +24,15 @@ dl_flush:
         movec   %d0, %cacr
         nop
         rts
+
+| telos_irq_off() -> the SR as it was, interrupts masked; telos_irq_restore(sr) puts it back
+| (the sites' commit, DL_SITES).
+        .globl  telos_irq_off, telos_irq_restore
+telos_irq_off:
+        move.w  %sr, %d0
+        move.w  #0x2700, %sr
+        rts
+telos_irq_restore:
+        move.l  4(%sp), %d0
+        move.w  %d0, %sr
+        rts

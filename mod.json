@@ -12,7 +12,8 @@
   "1.44": {
    "defsym": {
     "STR_CTOR": "0x4018afc8",
-    "ICON_VTABLE": "0x401ccd7c"
+    "ICON_VTABLE": "0x401ccd7c",
+    "IMAGE_END": "0x4029c4b0"
    }
   }
  },
@@ -27,11 +28,13 @@
  ],
  "cflags": [
   "-Os",
-  "-fno-ipa-sra"
+  "-fno-ipa-sra",
+  "-DDL_SITES"
  ],
  "defsym": {
   "STR_CTOR": "0x4018ac7c",
-  "ICON_VTABLE": "0x401cc9ac"
+  "ICON_VTABLE": "0x401cc9ac",
+  "IMAGE_END": "0x4029b4b0"
  },
  "subscribe": [
   {

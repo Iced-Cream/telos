@@ -89,6 +89,102 @@ s32 dl_read_file(const char *name, u8 *buf, u32 max)
     return (s32)e->size;
 }
 
+#ifdef DL_SITES
+/* ---- sites (POC): mods that write the OS's code, as the Octatrack's TELOS ----------------------------
+ * The linker (vendor/drive-loader, DL_SITES) checks each site's bytes against stock's (sha256), refuses
+ * two mods' overlapping sites and writes them between dl_commit_begin and dl_commit_end. At ev_card_ready
+ * the init task runs and the UI, MIDI and project tasks do not exist yet; the commit masks interrupts and
+ * writes. POC: no scan of the other tasks' stacks for a return address inside a site (the Octatrack's
+ * dl_commit_begin does one), and stock bytes come from RAM as the OS has them at the join. */
+extern char IMAGE_END[];                 /* mod.json's defsym: the main OS image's end, per OS version */
+#define IMAGE_LO 0x40000400u
+
+static const u32 K[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+#define ROR(x, n) ((x) >> (n) | (x) << (32 - (n)))
+
+static void sha_block(u32 *h, const u8 *p)
+{
+    u32 w[64], a, b, c, d, e, g, hh, ff, i;
+    for (i = 0; i < 16; i++)
+        w[i] = dl_rd32(p + 4 * i);
+    for (; i < 64; i++) {
+        u32 s0 = ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        u32 s1 = ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    a = h[0]; b = h[1]; c = h[2]; d = h[3]; e = h[4]; ff = h[5]; g = h[6]; hh = h[7];
+    for (i = 0; i < 64; i++) {
+        u32 t1 = hh + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25)) + ((e & ff) ^ (~e & g)) + K[i] + w[i];
+        u32 t2 = (ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        hh = g; g = ff; ff = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += ff; h[6] += g; h[7] += hh;
+}
+
+void dl_sha256(const u8 *p, u32 n, u8 out[32])
+{
+    static const u32 h0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+                              0x1f83d9ab, 0x5be0cd19};
+    u32 h[8];
+    u8 blk[64];
+    u32 i, done = 0, r;
+    for (i = 0; i < 8; i++)             /* word by word: a struct copy would call memcpy */
+        h[i] = h0[i];
+    while (n - done >= 64) {
+        sha_block(h, p + done);
+        done += 64;
+    }
+    r = n - done;
+    dl_memset(blk, 0, 64);
+    dl_memcpy(blk, p + done, r);
+    blk[r] = 0x80;
+    if (r >= 56) {
+        sha_block(h, blk);
+        dl_memset(blk, 0, 64);
+    }
+    dl_wr32(blk + 56, 0);
+    dl_wr32(blk + 60, n << 3);
+    sha_block(h, blk);
+    for (i = 0; i < 8; i++)
+        dl_wr32(out + 4 * i, h[i]);
+}
+
+int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= (u32)IMAGE_END; }
+
+void dl_stock_read(u8 *dst, u32 a, u32 n) { dl_memcpy(dst, (const void *)a, n); }
+void dl_site_saving(u32 addr, u32 len) { (void)addr; (void)len; }
+
+u32 telos_irq_off(void);
+void telos_irq_restore(u32 sr);
+static u32 commit_sr;
+volatile u32 telos_sites_written;
+
+int dl_commit_begin(void)
+{
+    commit_sr = telos_irq_off();
+    return 1;
+}
+
+void dl_commit_end(void)
+{
+    u32 i, a, n;
+    for (i = 0; i < dl_sites_n(); i++)
+        if (dl_site_live(i, &a, &n))
+            telos_sites_written++;
+    dl_flush();
+    telos_irq_restore(commit_sr);
+}
+#endif
+
 /* ---- the directory ------------------------------------------------------------------------------- */
 static u8 dirbuf[TS_DIR_BYTES] __attribute__((aligned(16)));
 static u8 cur_copy;                      /* the copy telos_dir came from */
