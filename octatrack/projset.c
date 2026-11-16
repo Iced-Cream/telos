@@ -154,6 +154,7 @@ static void check(const u32 *pair, u32 n, int issues_only)
 
 /* ---- the load, on the engine task --------------------------------------------------------------- */
 static volatile u8 show;                 /* 1: ask (LOAD PROJECT MODS?), 2: tell (issues only) */
+static u8 mark_later;                    /* the block differs, but the answer decides (answer) */
 static u8 boot_load;                     /* the next load is the start's own */
 static struct ot_file pf;
 
@@ -199,7 +200,11 @@ static void proj_loaded(int32_t found)
         run_build();
         for (k = 0; k < sizeof was / 4; k++)
             diff |= was[k] ^ ((const u32 *)&pdata)[k];
-        if (diff)
+        /* While LOAD PROJECT MODS? is open the project keeps its list: YES restarts into it, and only
+         * NO makes what runs the project's (answer). Marked now, core would save what runs before the
+         * answer, and the restart's load would offer to switch back. */
+        mark_later = diff && show == 1;
+        if (diff && !mark_later)
             core_projdata_dirty(OT_TAG('T', 'L', 'M', 'S'));
     }
 }
@@ -241,6 +246,9 @@ static void answer(int c)
         telos_restart_later();           /* the engine runs the three in order */
         return;
     }
+    if (mark_later)                      /* NO: the project keeps what runs */
+        core_projdata_dirty(OT_TAG('T', 'L', 'M', 'S'));
+    mark_later = 0;
     telos_redraw_later();
 }
 
