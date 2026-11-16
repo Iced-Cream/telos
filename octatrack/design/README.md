@@ -132,7 +132,7 @@ settle it. Nothing here has run on a unit.
   - APPLY writes `active`, and the next start loads the new set.
 - **DSP mods (dspload-ot 0.1).** A TELOS mod's DSP code runs on core 0 from the card. In ot_emu
   `--dsp`, the tone's ramp is in input A ([DSP.md](DSP.md), "Built").
-- **Not built yet:** the skip key, `.armed`, the early-site list, and `js/` parity for the descriptor's shadow.
+- **Built in 0.4** (octatrack/README.md): the skip key, `armed`, the early-site list (code 23), the restart, `dsp_load`.
 
 ## 8. Building it
 

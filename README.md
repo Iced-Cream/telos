@@ -12,7 +12,7 @@ firmware, and is meant for every device elekloader supports.
 | Device | telos | Status |
 |---|---|---|
 | Digitone mk1 and Digitone Keys (OS 1.43, 1.44) | 0.2 | runs on a unit (OS 1.44); OS 1.43 in digiemu's emulator only |
-| Octatrack MKI and MKII (OS 1.40C) | 0.3 | runs in octabam's emulator only; in [`octatrack/`](octatrack/README.md) |
+| Octatrack MKI and MKII (OS 1.40C) | 0.4 | runs in octabam's emulator only; in [`octatrack/`](octatrack/README.md) |
 | Digitakt, Digitakt II, Digitone II, Analog Rytm, Analog Four, Model:Cycles, Model:Samples | | planned |
 
 The rest of this page is the Digitone mk1's: OS 1.43 and 1.44, on elekloader's core-dn1 5.0 or newer.
