@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * TELOS for the Octatrack, 0.2: the mods on the card as rows of MAIN MENU > MODS (settings-ot 0.2's
+ * TELOS for the Octatrack: the mods on the card as rows of MAIN MENU > MODS (settings-ot 0.2's
  * ot_mod_rows). One row per .elemod file in /ELEKLOADER/MODS, its value what will be against what
  * runs (ON, OFF, +ON, -OFF, ERR), then APPLY. YES on a mod ticks or unticks it: a tick runs the boot's
  * own checks (dl_check) on the set as it would be, and a clash opens a dialog that names the other mod
- * and offers the swap. APPLY writes /ELEKLOADER/MODS/active; the set changes at the next start.
+ * and offers the swap. APPLY writes /ELEKLOADER/MODS/active and offers to restart (0.4); the set
+ * changes at the next start. A start that skipped the mods shows them SKIP, and says why once.
  * The design: design/ON-THE-UNIT.md.
  */
 #include "octatrack/core.h"
@@ -153,6 +154,8 @@ static const char *state_of(int i)
 {
     const struct cmod *m = &cm[i];
     int running = m->boot_on && m->state == DL_ST_LOADED;
+    if (telos_skip && m->boot_on)
+        return m->on ? "SKIP " : "-OFF ";
     return m->on ? (running ? "ON   " : m->boot_on ? "ERR  " : "+ON  ") : (running ? "-OFF " : "OFF  ");
 }
 
@@ -244,6 +247,8 @@ static const char *reason(int code)
     case DL_R_SITE: return "SAME CODE";
     case DL_R_STOCK: return "CODE NOT STOCK";
     case DL_R_FLASHED: return "CHANGES FLASHED CODE";
+    case DL_R_EARLY: return "RUNS AT START: FLASH IT";
+    case DL_R_BUSY: return "NO QUIET MOMENT";
     default: return "REFUSED";
     }
 }
@@ -263,8 +268,12 @@ static u16 redraw_in;
 
 /* ev_tick, the sys task, 60 a second: the redraw a dialog's answer asked for, once the dialog has
  * gone and the menu is back (it keeps trying for 5 s). */
+static void skip_tick(void);
+
 void telos_tick(void)
 {
+    telos_armed_tick();
+    skip_tick();
     telos_proj_tick();
     if (!redraw_in)
         return;
@@ -401,17 +410,39 @@ static void write_active(u32 unused)
 
 void telos_post_active(void) { ot_engine_post(write_active, 0); }
 
+static void apply_answer(int c)
+{
+    if (c == 0)                          /* YES: after active is written (the same queue) */
+        telos_restart_later();
+    else
+        redraw_in = 300;
+}
+
 static void rows_action(int i)
 {
     if (i >= ncm) {
         telos_post_active();
-        say("SAVED TO THE CARD", "APPLIES AT THE NEXT START", "", noop_answer);
+        say("SAVED TO THE CARD", "RESTART NOW TO APPLY?", "YES: RESTART  NO: LATER", apply_answer);
         return;
     }
     if (cm[i].on)
         cm[i].on = 0;
     else
         tick(i);
+}
+
+/* ---- a start that skipped the mods says why, once, after the load's own screens ---------------- */
+static void skip_tick(void)
+{
+    static u16 wait;
+    static u8 said;
+    if (said || !telos_skip || (telos_skip != DL_SKIP_KEY && telos_skip != DL_SKIP_ARMED))
+        return;
+    if (++wait < 120 || DIALOG_OPEN)     /* 2 s in */
+        return;
+    said = 1;
+    say("TELOS SKIPPED THE MODS", telos_skip == DL_SKIP_KEY ? "NO WAS HELD AT START" : "THE LAST START FAILED",
+        "THE NEXT START LOADS THEM", noop_answer);
 }
 
 const struct ot_mod_rows telos_rows = {

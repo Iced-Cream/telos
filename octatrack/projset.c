@@ -7,8 +7,8 @@
  * When a loaded project's mods differ from what runs, a dialog counts what YES would change
  * (+ turn on, - turn off, ~ the project's version of a mod, both on the card) and what it can't
  * (? not on this card or in this build, ! another version, or one the boot refused). YES ticks the
- * card's mods as the project had them and saves the set for the next start; MAIN MENU > MODS shows
- * the ticks. The next start's own load of that project says only what is still not as it had it.
+ * card's mods as the project had them, saves the set and restarts (0.4); the start's own load of
+ * that project then says only what is still not as it had it.
  * Otherwise the start's load says nothing, nor does a project without the block.
  *
  * The block goes after the other mods' (order 95): when core's project data is full, theirs keep
@@ -164,6 +164,8 @@ static void proj_loaded(int32_t found)
     telos_pj[0]++;
     telos_pj[3] = (u32)found;
     boot_load = 0;
+    if (telos_skip)                      /* nothing linked this start: the project's list stays as saved */
+        return;
     if (boot) {
         /* a start after a YES: the list YES set up, and what is still not as it had it */
         static u32 pend[1 + SET_MAX * 2];
@@ -231,11 +233,13 @@ static void write_pending(u32 unused)
 static void answer(int c)
 {
     u32 i;
-    if (c == 0) {                        /* YES: tick as the project had them */
+    if (c == 0) {                        /* YES: tick as the project had them, then restart */
         for (i = 0; i < nact; i++)
             telos_cm[act[i].entry].on = act[i].on;
         telos_post_active();
         ot_engine_post(write_pending, 0);
+        telos_restart_later();           /* the engine runs the three in order */
+        return;
     }
     telos_redraw_later();
 }
@@ -275,7 +279,7 @@ void telos_proj_tick(void)
         d = num(d, '!', n_other);
     d[d > l1 ? -1 : 0] = 0;
     if (show == 1)
-        telos_say("LOAD PROJECT MODS?", l1, "YES: SET FOR NEXT START", answer);
+        telos_say("LOAD PROJECT MODS?", l1, "YES: SET AND RESTART", answer);
     else
         telos_say("PROJECT MODS NOT ALL HERE", l1, "", 0);
     show = 0;

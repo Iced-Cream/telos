@@ -24,5 +24,8 @@ void telos_redraw_later(void);           /* redraw the MODS rows once a dialog h
 void telos_say(const char *a, const char *b, const char *c, void (*answer)(int));
 void telos_proj_boot(void);              /* projset.c, after the boot's link and the scan */
 void telos_proj_tick(void);
+void telos_armed_tick(void);             /* telos.c: empties armed 10 s into the start */
+void telos_restart_later(void);          /* telos.c: restart the unit after the engine's queued jobs */
+extern u8 telos_skip;                    /* why this start loaded nothing (DL_SKIP_*), 0: it linked */
 
 #endif

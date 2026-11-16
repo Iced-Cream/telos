@@ -1,13 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  *
- * TELOS for the Octatrack (OS 1.40C), 0.1: mods from the CF card, linked at boot.
+ * TELOS for the Octatrack (OS 1.40C): mods from the CF card, linked at boot.
  *
  * At the card's first mount (core-ot 0.41's ev_card, in the sys task: after main's end and the USB
  * init, before the project load and the first audio frame), the loader reads
  * /ELEKLOADER/MODS/active, links the .elemod files it names into drive_area with the Rytm's boot
  * linker (vendor/drive-loader/dlink.c, built with DL_SITES: mods may write sites), and writes
- * /ELEKLOADER/MODS/.status. Sites and the tables' merge are written with interrupts masked, once no
+ * /ELEKLOADER/MODS/status.txt. Sites and the tables' merge are written with interrupts masked, once no
  * task is stopped inside a site (dl_commit_begin). The design: design/.
+ *
+ * 0.4: a start skips the mods with [NO] held at the mount, or after a start that didn't get 10 s in
+ * (/ELEKLOADER/MODS/armed, written before the link and emptied 10 s after); a site in what the OS
+ * used before the mount is refused (23 early, dl_site_early); and telos_restart_later restarts the
+ * unit (the ColdFire's soft reset), for APPLY and a project's mods.
  */
 #include "../vendor/drive-loader/dl.h"
 #include "octatrack/core.h"
@@ -160,6 +165,22 @@ void dl_sha256(const u8 *p, u32 n, u8 out[32])
 
 int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= IMAGE_HI; }
 
+/* What the OS uses before the card mounts and not again before it matters (elekloader's profile,
+ * drive_early, for 1.40C: the same ranges): a site there would come too late from the card. */
+static const u32 early[][2] = {
+    {0x4001dfbc, 0x4001e042},            /* the USB init, run once before the mount */
+    {0x400e2000, 0x400e21e0},            /* the USB descriptor tables it reads */
+};
+
+int dl_site_early(u32 addr, u32 len)
+{
+    u32 i;
+    for (i = 0; i < sizeof early / sizeof early[0]; i++)
+        if (addr < early[i][1] && early[i][0] < addr + len)
+            return 1;
+    return 0;
+}
+
 /* The OS changes some of its image's data before the card mounts (0x400b9714 is one, measured), so a
  * mod's stock parts there would copy the changed bytes. ev_boot_early (before the OS runs) keeps a
  * copy of the data region; the stock parts come from it. The DSP payloads after it are wiped by
@@ -293,21 +314,30 @@ static void put_u(u32 v)
         out[out_n < sizeof out - 1 ? out_n++ : out_n] = b[--k];
 }
 
+u8 telos_skip;                           /* why this start loaded nothing (DL_SKIP_*), 0: it linked */
+
 static void write_status(int n)
 {
     static const char *const st[] = {"none", "loaded", "refused", "dropped"};
+    static const char *const sk[] = {"", "NO held at the start", "the last start didn't get 10 s in",
+                                     "", "", "", "too many lines in active", "no memory", "no quiet moment"};
     int i;
     out_n = 0;
-    put_s("telos 0.1: ");
+    put_s("telos 0.4: ");
     put_u(telos_state[1]);
     put_s(" loaded of ");
     put_u((u32)n);
     put_s(", skip ");
-    put_u(dl_skip_reason);
+    put_u(telos_skip ? telos_skip : dl_skip_reason);
     put_s(", tries ");
     put_u(telos_state[4]);
     put_s("\n");
-    for (i = 0; i < n && dl_status; i++) {
+    if (telos_skip) {
+        put_s("skipped: ");
+        put_s(telos_skip < sizeof sk / sizeof sk[0] ? sk[telos_skip] : "?");
+        put_s("\n");
+    }
+    for (i = 0; i < n && dl_status && !telos_skip; i++) {
         put_s(dl_status[i].id);
         put_s(" ");
         put_s(dl_status[i].state < 4 ? st[dl_status[i].state] : "?");
@@ -340,11 +370,54 @@ void telos_heap_reset(void) { heap_used = 0; }
 static char active[8192];
 static u8 done;
 
+/* ---- the skip key: [NO] held when the card mounts ------------------------------------------------
+ * ev_key from the first panel message on: the panel sends a key's row when it changes, so a key held
+ * from power-on comes as a press, if the OS hears it before the mount (to see on a unit). */
+#define KEY_NO 50                        /* the panel's row 6, bit 2 (octabam's key map) */
+u8 telos_no_held;                       /* global: a debugger reads it */
+
+int telos_key(int code, int pressed)
+{
+    if (code == KEY_NO)
+        telos_no_held = pressed != 0;
+    return 0;                            /* never taken: the page and the OS see it as before */
+}
+
+/* ---- armed: the crash guard ----------------------------------------------------------------------
+ * Written (one byte) before the link and emptied 10 s after, on the engine task. A start that finds
+ * it not empty skips the mods once and empties it, so the start after that tries them again. */
+#define ARMED "armed"
+static u16 armed_in;                     /* ev_tick countdown to emptying it, 0: none */
+
+static void armed_write(const char *what, u32 n)
+{
+    path_of(ARMED);
+    if (ot_file_open(&f, path, "w") >= 0) {
+        if (n)
+            ot_file_write(&f, what, n);
+        ot_file_close(&f);
+    }
+}
+
+static void armed_clear(u32 unused)
+{
+    (void)unused;
+    armed_write("", 0);
+}
+
+/* menu.c's ev_tick: empty armed once the start has run 10 s. */
+void telos_armed_tick(void)
+{
+    if (armed_in && !--armed_in)
+        ot_engine_post(armed_clear, 0);
+}
+
 static void telos_boot(void)
 {
     s32 len;
     int n, loaded;
     u32 i;
+    u8 one[4];
     telos_state[0] = 1;
     heap_used = 0;
     len = dl_read_file("active", (u8 *)active, sizeof active);
@@ -355,12 +428,26 @@ static void telos_boot(void)
     n = dl_parse_active(active, (u32)len, 0);
     if (n < 0 || n > (int)(sizeof choice / sizeof choice[0])) {
         telos_state[0] = 3;
-        telos_state[3] = DL_SKIP_COUNT;
+        telos_state[3] = telos_skip = DL_SKIP_COUNT;
         return;
     }
     dl_parse_active(active, (u32)len, choice);
-    telos_nchoice = n;
+    telos_nchoice = n;                   /* a skip keeps the set: MODS shows it, APPLY keeps it */
     telos_state[2] = (u32)n;
+    if (telos_no_held)
+        telos_skip = DL_SKIP_KEY;
+    else if (dl_read_file(ARMED, one, sizeof one) > 0) {
+        telos_skip = DL_SKIP_ARMED;
+        armed_write("", 0);              /* once: the next start tries them again */
+    }
+    if (telos_skip) {
+        telos_state[0] = 3;
+        telos_state[3] = telos_skip;
+        write_status(n);
+        return;
+    }
+    if (n)
+        armed_write("1", 1);
     loaded = dl_link((u32)(uintptr_t)core_desc, choice, n, drive_staging,
                      (u32)(uintptr_t)drive_staging_size);
     telos_state[1] = (u32)loaded;
@@ -370,7 +457,27 @@ static void telos_boot(void)
     for (i = 0; i < dl_inits_n; i++)
         if (dl_inits[i])
             ((void (*)(void))dl_inits[i])();
+    if (n)
+        armed_in = 600;                  /* 10 s of ev_tick (60 a second) */
 }
+
+/* ---- the restart ---------------------------------------------------------------------------------
+ * On the engine task, after the jobs posted before it (APPLY's active): a moment with interrupts on
+ * for the panel and MIDI to send what they hold, then the ColdFire's soft reset (telos.s). The stock
+ * OS never restarts itself (it asks for a power cycle), so this is the first thing that does: to see
+ * on a unit. */
+void telos_reset(void);
+
+static void restart_job(u32 unused)
+{
+    u32 i;
+    (void)unused;
+    for (i = 0; i < 3000000; i++)        /* about 0.1 s */
+        __asm__ volatile("nop");
+    telos_reset();
+}
+
+void telos_restart_later(void) { ot_engine_post(restart_job, 0); }
 
 /* ev_card: the first time a card is mounted. */
 void telos_card(unsigned state, int result, unsigned mode)

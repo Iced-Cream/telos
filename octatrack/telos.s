@@ -29,6 +29,19 @@ dl_flush:
         nop
         rts
 
+| void telos_reset(void): the ColdFire's soft reset (MCF5445x RCM: RCR at 0xFC0A0000, SOFTRST =
+| 0x80; the CCM's registers after it, MISCCR at 0xFC0A0010, are the ones the OS uses). As core-dn1's
+| core_restart_now: interrupts masked, the pipeline drained, then the write. Never returns.
+        .globl  telos_reset
+telos_reset:
+        move.w  #0x2700, %sr
+        .rept   27
+        nop
+        .endr
+        moveq   #-128, %d0
+        move.b  %d0, 0xFC0A0000
+1:      bra.s   1b
+
 | u32 telos_irq_off(void): mask every interrupt, return the old SR.
         .globl  telos_irq_off
 telos_irq_off:
