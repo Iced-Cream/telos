@@ -20,6 +20,7 @@
 
 extern char core_desc[];
 void dl_flush(void);
+extern void core_param_install(void) __attribute__((weak));   /* core-dn1 5.4; 0 on older cores */
 
 #define STAGING      ((u8 *)0x44000000)  /* the bulk area's start: scratch at the join (above) */
 #define STAGING_SIZE 0x80000u            /* 512 KB: the largest file one boot reads */
@@ -83,10 +84,187 @@ s32 dl_read_file(const char *name, u8 *buf, u32 max)
         return -2;
     if (e->sector < TS_DATA || e->sector + (e->size + 511) / 512 > TS_SECTORS)
         return -3;
-    if (e->size && fw_card_read(TS_SECTOR + e->sector, e->size, buf) != 0)
-        return -3;
+    {
+        u32 at, k;                       /* 16 KB at a time: a large file (DigiTide's 131 KB) read in one
+                                          * call went past 64 KB, which the card layer splits by recursion,
+                                          * and in digiemu's cold boot never finished in time */
+        for (at = 0; at < e->size; at += k) {
+            k = e->size - at < 0x4000u ? e->size - at : 0x4000u;
+            if (fw_card_read(TS_SECTOR + e->sector + at / 512, k, buf + at) != 0)
+                return -3;
+        }
+    }
     return (s32)e->size;
 }
+
+#ifdef DL_SITES
+/* ---- sites (POC): mods that write the OS's code, as the Octatrack's TELOS ----------------------------
+ * The linker (vendor/drive-loader, DL_SITES) checks each site's bytes against stock's (sha256), refuses
+ * two mods' overlapping sites and writes them between dl_commit_begin and dl_commit_end. At ev_card_ready
+ * the init task runs and the UI, MIDI and project tasks do not exist yet; the commit masks interrupts and
+ * writes once no task is stopped inside a site (dl_commit_begin, below). Stock bytes come from RAM as
+ * the OS has them at the join, with the descriptor's shadow over the ranges the flashed build wrote. */
+extern char IMAGE_END[];                 /* mod.json's defsym: the main OS image's end, per OS version */
+#define IMAGE_LO 0x40000400u
+
+static const u32 K[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+#define ROR(x, n) ((x) >> (n) | (x) << (32 - (n)))
+
+static void sha_block(u32 *h, const u8 *p)
+{
+    u32 w[64], a, b, c, d, e, g, hh, ff, i;
+    for (i = 0; i < 16; i++)
+        w[i] = dl_rd32(p + 4 * i);
+    for (; i < 64; i++) {
+        u32 s0 = ROR(w[i - 15], 7) ^ ROR(w[i - 15], 18) ^ (w[i - 15] >> 3);
+        u32 s1 = ROR(w[i - 2], 17) ^ ROR(w[i - 2], 19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    a = h[0]; b = h[1]; c = h[2]; d = h[3]; e = h[4]; ff = h[5]; g = h[6]; hh = h[7];
+    for (i = 0; i < 64; i++) {
+        u32 t1 = hh + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25)) + ((e & ff) ^ (~e & g)) + K[i] + w[i];
+        u32 t2 = (ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        hh = g; g = ff; ff = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += ff; h[6] += g; h[7] += hh;
+}
+
+void dl_sha256(const u8 *p, u32 n, u8 out[32])
+{
+    static const u32 h0[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+                              0x1f83d9ab, 0x5be0cd19};
+    u32 h[8];
+    u8 blk[64];
+    u32 i, done = 0, r;
+    for (i = 0; i < 8; i++)             /* word by word: a struct copy would call memcpy */
+        h[i] = h0[i];
+    while (n - done >= 64) {
+        sha_block(h, p + done);
+        done += 64;
+    }
+    r = n - done;
+    dl_memset(blk, 0, 64);
+    dl_memcpy(blk, p + done, r);
+    blk[r] = 0x80;
+    if (r >= 56) {
+        sha_block(h, blk);
+        dl_memset(blk, 0, 64);
+    }
+    dl_wr32(blk + 56, 0);
+    dl_wr32(blk + 60, n << 3);
+    sha_block(h, blk);
+    for (i = 0; i < 8; i++)
+        dl_wr32(out + 4 * i, h[i]);
+}
+
+int dl_site_ok(u32 addr, u32 len) { return addr >= IMAGE_LO && addr + len <= (u32)IMAGE_END; }
+
+/* A mod's region must lie inside one of the device's free areas, as a flashed mod's must (elekloader's
+ * devices/digitone_mk1.py, areas: the same on 1.43 and 1.44). The linker's scratch at 0x44000000 and
+ * core's stock copy at 0x44200000 are only used during the link, before any mod runs. */
+int dl_region_ok(u32 lo, u32 hi)
+{
+    return (lo >= 0x44000000u && hi <= 0x47be0000u)       /* bulk */
+        || (lo >= 0x47be0000u && hi <= 0x47c00000u);      /* ddr */
+}
+
+/* Stock bytes: core-dn1 5.4 copies the OS image before the OS runs (core_stock_info: where, bytes, from
+ * 0x40000400); the OS changes some of its data before the join, so the copy is read where it covers. On
+ * an older core, RAM as it is at the join. The descriptor's shadow goes over either (dlink.c). */
+extern const struct core_stock_info core_stock_info __attribute__((weak));   /* core3.h */
+
+void dl_stock_read(u8 *dst, u32 a, u32 n)
+{
+    if (&core_stock_info && a >= IMAGE_LO && a + n <= IMAGE_LO + core_stock_info.len)
+        dl_memcpy(dst, (const void *)(core_stock_info.at + (a - IMAGE_LO)), n);
+    else
+        dl_memcpy(dst, (const void *)a, n);
+}
+void dl_site_saving(u32 addr, u32 len) { (void)addr; (void)len; }
+
+u32 telos_irq_off(void);
+void telos_irq_restore(u32 sr);
+u32 telos_sp(void);
+static u32 commit_sr;
+volatile u32 telos_sites_written;
+volatile u32 telos_commit_tries;         /* how many tries the last commit took (50 + 1: none quiet) */
+
+/* ---- quiescence: no task may be stopped inside a site ----------------------------------------------
+ * The OS's ten tasks are static, with fixed TCBs and stacks: core-dn1 5.4 lists them (core_tasks: the
+ * count, the init task's row, the TCB's saved-SP offset, then TCB, stack and size per task). A site may
+ * be written only when no live stack word points strictly inside one: a task stopped there, or a return
+ * address into its middle. A task not created yet has a saved SP outside its stack and is skipped; the
+ * init task (the one TELOS runs in) is scanned from its live SP. Without core_tasks (an older core)
+ * nothing tells, so no site is written (26). */
+extern const struct core_tasks core_tasks __attribute__((weak));   /* core3.h */
+
+static int inside(u32 v)
+{
+    u32 i, a, n;
+    for (i = 0; i < dl_sites_n(); i++)
+        if (dl_site_live(i, &a, &n) && v > a && v < a + n)
+            return 1;
+    return 0;
+}
+
+static int stack_busy(u32 lo, u32 hi)
+{
+    for (lo &= ~1u; lo + 4 <= hi; lo += 2)
+        if (inside(*(volatile u32 *)lo))
+            return 1;
+    return 0;
+}
+
+int dl_commit_begin(void)
+{
+    const struct core_tasks *k = &core_tasks;
+    const struct core_task *t;
+    u32 tries, i;
+    if (!k) {
+        telos_commit_tries = 0;
+        return 0;
+    }
+    t = k->t;
+    for (tries = 0; tries < 50; tries++) {
+        int busy = 0;
+        commit_sr = telos_irq_off();
+        for (i = 0; i < k->n && !busy; i++) {
+            u32 lo, hi = t[i].stack + t[i].size;
+            lo = i == k->init ? telos_sp() : *(volatile u32 *)(t[i].tcb + k->sp_at);
+            if (lo < t[i].stack || lo >= hi)
+                continue;                /* not created yet, or not on its own stack */
+            busy = stack_busy(lo, hi);
+        }
+        telos_commit_tries = tries + 1;
+        if (!busy)
+            return 1;                    /* interrupts stay masked until dl_commit_end */
+        telos_irq_restore(commit_sr);
+        for (i = 0; i < 200000; i++)     /* let the other tasks move on */
+            __asm__ volatile("nop");
+    }
+    telos_commit_tries = 51;
+    return 0;
+}
+
+void dl_commit_end(void)
+{
+    u32 i, a, n;
+    for (i = 0; i < dl_sites_n(); i++)
+        if (dl_site_live(i, &a, &n))
+            telos_sites_written++;
+    dl_flush();
+    telos_irq_restore(commit_sr);
+}
+#endif
 
 /* ---- the directory ------------------------------------------------------------------------------- */
 static u8 dirbuf[TS_DIR_BYTES] __attribute__((aligned(16)));
@@ -261,10 +439,14 @@ static void boot(void)
     }
     armed = 1;
     armed_ticks = 0;
+    if (core_param_install)              /* core-dn1 5.4: the linked mods' parameter slots */
+        core_param_install();
     for (i = 0; i < dl_inits_n; i++)
         if (dl_inits[i])
             ((void (*)(void))dl_inits[i])();
 }
+
+void telos_proj_boot(void);
 
 void telos_card_ready(int32_t status)
 {
@@ -274,4 +456,5 @@ void telos_card_ready(int32_t status)
         return;
     }
     boot();
+    telos_proj_boot();                   /* projset.c: the index, and what runs, before the project loads */
 }

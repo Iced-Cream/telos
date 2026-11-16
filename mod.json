@@ -12,7 +12,8 @@
   "1.44": {
    "defsym": {
     "STR_CTOR": "0x4018afc8",
-    "ICON_VTABLE": "0x401ccd7c"
+    "ICON_VTABLE": "0x401ccd7c",
+    "IMAGE_END": "0x4029c4b0"
    }
   }
  },
@@ -23,15 +24,19 @@
   "row.s",
   "flush.s",
   "vendor/drive-loader/dlink.c",
-  "vendor/drive-loader/json.c"
+  "vendor/drive-loader/json.c",
+  "projset.c"
  ],
  "cflags": [
   "-Os",
-  "-fno-ipa-sra"
+  "-fno-ipa-sra",
+  "-DDL_SITES",
+  "-DDL_REGIONS"
  ],
  "defsym": {
   "STR_CTOR": "0x4018ac7c",
-  "ICON_VTABLE": "0x401cc9ac"
+  "ICON_VTABLE": "0x401cc9ac",
+  "IMAGE_END": "0x4029b4b0"
  },
  "subscribe": [
   {
@@ -73,12 +78,50 @@
    "event": "ev_crash",
    "fn": "telos_crash",
    "order": 1
+  },
+  {
+   "event": "ev_key",
+   "fn": "telos_proj_key",
+   "order": 0
+  },
+  {
+   "event": "ev_draw",
+   "fn": "telos_proj_draw",
+   "order": 100
+  },
+  {
+   "event": "ev_tick",
+   "fn": "telos_proj_tick",
+   "order": 91
   }
  ],
  "resources": {
-  "core": "5.0"
+  "core": "5.0",
+  "names": [
+   "projdata:TLMS"
+  ]
  },
  "requires": [
   "core"
+ ],
+ "weak": [
+  "core_param_install",
+  "core_stock_info",
+  "core_tasks"
+ ],
+ "contribute": [
+  {
+   "to": "core_projdata",
+   "order": 95,
+   "data": "00000000",
+   "relocs": [
+    [
+     0,
+     "abs32",
+     "sym:telos_projdata",
+     0
+    ]
+   ]
+  }
  ]
 }

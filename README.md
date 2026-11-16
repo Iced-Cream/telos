@@ -12,7 +12,7 @@ firmware, and is meant for every device elekloader supports.
 | Device | telos | Status |
 |---|---|---|
 | Digitone mk1 and Digitone Keys (OS 1.43, 1.44) | 0.2 | runs on a unit (OS 1.44); OS 1.43 in digiemu's emulator only |
-| Octatrack MKI and MKII (OS 1.40C) | 0.2 | runs in the emulator; not in this repo yet |
+| Octatrack MKI and MKII (OS 1.40C) | 0.4 | runs in octabam's emulator only; in [`octatrack/`](octatrack/README.md) |
 | Digitakt, Digitakt II, Digitone II, Analog Rytm, Analog Four, Model:Cycles, Model:Samples | | planned |
 
 The rest of this page is the Digitone mk1's: OS 1.43 and 1.44, on elekloader's core-dn1 5.0 or newer.
@@ -63,6 +63,20 @@ links the new set; NO goes back to SETTINGS. PLAY, STOP and TEMPO stay the Digit
 clears it. A crash before then restarts the unit at once, and a boot that finds the guard links nothing
 and clears it: one safe boot, then the set again.
 
+**Projects and their mods.** Each project saved under TELOS keeps the list of mods that were running (a
+hash of each mod's id and version, in the project's mod data). Loading one (the Digitone asks to save
+the current project first, as stock does):
+
+- After the load, when the project's mods are not the ones running, **LOAD PROJECT MODS?** lists what YES
+  would do: `+` turn on, `-` turn off, `~` switch to the project's version (both in the store), and what it
+  cannot: `?` a mod not on the unit, `!` another version than the project's, or one the boot refused
+  (`E<n>`). YES writes the store and restarts; NO keeps the mods. With only `?` and `!` it says so (YES OK).
+- After that restart the unit says only what is still not as the project had it.
+
+The boot's own load of the last project says nothing, nor does a project saved without the list (before
+this, or with the project's mod data full: the list goes last, after the pedals' settings). Saving a
+project records what runs then.
+
 ## What a TELOS mod may be
 
 A +Drive mod (elekloader's docs/FORMAT.md, "+Drive mods"): `.run` and `.bss` only, no sites, entries
@@ -78,8 +92,9 @@ erases only below that, and the smallest eMMC part the firmware accepts ends at 
 project slot, so it never shows in Transfer. It holds up to 63 files.
 
 The directory has two copies, each with a sequence number and a CRC-32. The newer valid copy counts, and
-a write goes to the other one, so a write cut short by a power loss leaves the older copy standing. The
-layout is in `telos.h`.
+a write goes to the other one, so a write cut short by a power loss leaves the older copy standing.
+Sectors +17 to +31 hold TELOS's index of the mods it has met (id, version, title), which names a mod a
+project needs after the mod is gone. The layout is in `telos.h` and `projset.c`.
 
 ## How it works
 
