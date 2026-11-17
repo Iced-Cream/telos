@@ -1,7 +1,7 @@
 # TELOS (Analog Four MKII)
 
 Mods kept on the Analog Four MKII itself, for OS 1.56 with elekloader's core-a4mk2 0.9 or newer. Version
-0.1, built and linted against stock 1.56 only: not yet run in an emulator or on a unit.
+0.2, built and linted against stock 1.56 only: not yet run in an emulator or on a unit.
 
 TELOS on the A4 is elekloader's A4 Drive Loader (`mods/drive-loader-a4mk2`, in
 [`vendor/drive-loader-a4mk2`](../vendor/drive-loader-a4mk2/README.md)) under TELOS's name. Only the
@@ -12,8 +12,10 @@ loader's, unchanged.
 
 Build your OS with TELOS in elekloader, as any mod: this folder (with `vendor/` beside it) and
 core-a4mk2 0.9 with your stock OS file, then flash it as any OS update. Back up your projects first;
-the stock OS file puts the unit back. TELOS and the Drive Loader claim the same names
-(`data-route:mods`, `settings:MODS`), so a build has one or the other.
+the stock OS file puts the unit back. **It is `drive-loader` to the linker.** The module's id is `drive-loader`
+(its title stays TELOS), so +Drive mods that require `drive-loader` load under TELOS with no change,
+and a build has TELOS or the Drive Loader, never both: same id, same claimed names
+(`data-route:mods`, `settings:MODS`).
 
 ## Using it
 
